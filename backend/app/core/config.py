@@ -27,19 +27,9 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
     
-    # Database
-    POSTGRES_SERVER: str = "localhost"
-    POSTGRES_USER: str = "credit_app"
-    POSTGRES_PASSWORD: str = "password"
-    POSTGRES_DB: str = "credit_reports"
-    POSTGRES_PORT: str = "5432"
-    DATABASE_URL: Optional[str] = None
-    
-    @validator("DATABASE_URL", pre=True)
-    def assemble_db_connection(cls, v: Optional[str], values: dict) -> str:
-        if isinstance(v, str):
-            return v
-        return f"postgresql+asyncpg://{values.get('POSTGRES_USER')}:{values.get('POSTGRES_PASSWORD')}@{values.get('POSTGRES_SERVER')}:{values.get('POSTGRES_PORT')}/{values.get('POSTGRES_DB')}"
+    # Database (SQLite - no PostgreSQL needed!)
+    DATABASE_URL: str = "sqlite+aiosqlite:///./credit_reports.db"
+    DATABASE_PATH: str = "./credit_reports.db"
     
     # Redis (for caching and background tasks)
     REDIS_URL: str = "redis://localhost:6379/0"

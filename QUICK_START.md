@@ -1,30 +1,42 @@
-# 🚀 Quick Start Guide (ChromaDB-Only Version)
+# 🚀 Quick Start Guide (SQLite + ChromaDB Version)
 
-This simplified version uses **ChromaDB only** - no pgvector extension required! Perfect for getting started quickly.
+This simplified version uses **SQLite + ChromaDB** - no PostgreSQL required! Perfect for getting started quickly.
 
 ## ⚡ One-Command Setup
 
 ```bash
 # Clone and run the setup script
-python setup_simplified.py
+python setup_sqlite.py
 ```
 
 ## 📋 Prerequisites
 
 - **Python 3.9+** 
 - **Node.js 16+**
-- **PostgreSQL** (standard installation, no extensions needed)
 - **AWS Account** with Bedrock access
+- ✅ **No database installation needed!** (uses SQLite file)
 
 ## 🏃 Manual Setup (if you prefer step-by-step)
 
 ### 1. Database Setup
 ```bash
-# Create database (standard PostgreSQL)
-createdb credit_reports
+# No database installation needed!
+# SQLite database will be created automatically as credit_reports.db
 
-# Run simplified schema (no pgvector!)
-psql -d credit_reports -f database/simple_schema.sql
+# If you want to create it manually:
+python -c "
+import asyncio
+import aiosqlite
+
+async def create_db():
+    with open('database/sqlite_schema.sql', 'r') as f:
+        schema = f.read()
+    async with aiosqlite.connect('credit_reports.db') as conn:
+        await conn.executescript(schema)
+        await conn.commit()
+
+asyncio.run(create_db())
+"
 ```
 
 ### 2. Backend Setup
@@ -107,16 +119,13 @@ npm start
 
 ### Essential Settings (.env file)
 ```env
-# AWS Credentials (REQUIRED)
-AWS_ACCESS_KEY_ID=your_key_here
-AWS_SECRET_ACCESS_KEY=your_secret_here
-AWS_REGION=us-east-1
+# Database (SQLite - No installation needed!)
+DATABASE_URL=sqlite+aiosqlite:///./credit_reports.db
+DATABASE_PATH=./credit_reports.db
 
-# Database (Standard PostgreSQL)
-POSTGRES_SERVER=localhost
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_password
-POSTGRES_DB=credit_reports
+# AWS Credentials (Dynamic Mode)
+USE_DYNAMIC_BEDROCK_RUNTIME=true
+AWS_REGION=us-east-1
 
 # ChromaDB (Local Storage)
 CHROMA_PERSIST_DIRECTORY=./chroma_db
@@ -150,14 +159,14 @@ VECTOR_DB_TYPE=chroma
 
 **Common Issues:**
 
-1. **Database Connection Error**
+1. **Database Issues**
    ```bash
-   # Check PostgreSQL is running
-   pg_isready
+   # Check if SQLite database exists
+   ls -la credit_reports.db
    
-   # Restart if needed
-   brew services restart postgresql  # macOS
-   sudo systemctl restart postgresql  # Linux
+   # Recreate if corrupted
+   rm credit_reports.db
+   python setup_sqlite.py
    ```
 
 2. **ChromaDB Permission Error**

@@ -1,18 +1,20 @@
 import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from pathlib import Path
 import structlog
+import aiosqlite
 
 from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
-# Create async engine
+# Create async engine for SQLite
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
-    pool_size=20,
-    max_overflow=0,
+    # SQLite-specific settings
+    connect_args={"check_same_thread": False}
 )
 
 # Create async session factory
@@ -27,19 +29,29 @@ Base = declarative_base()
 
 
 async def init_db():
-    """Initialize the database"""
+    """Initialize the SQLite database"""
     try:
-        # Import models to register them
-        from app.models import document, report, user  # noqa
+        # For SQLite, we'll use the schema file directly
+        schema_path = Path("database/sqlite_schema.sql")
         
-        # Create tables
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        
-        logger.info("Database initialized successfully")
+        if schema_path.exists():
+            with open(schema_path, 'r') as f:
+                schema_sql = f.read()
+            
+            # Execute schema creation
+            async with aiosqlite.connect(settings.DATABASE_PATH) as conn:
+                await conn.executescript(schema_sql)
+                await conn.commit()
+            
+            logger.info("SQLite database initialized successfully", path=settings.DATABASE_PATH)
+        else:
+            logger.warning("SQLite schema file not found, using SQLAlchemy metadata", path=str(schema_path))
+            # Fallback to SQLAlchemy metadata
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
         
     except Exception as e:
-        logger.error("Failed to initialize database", error=str(e))
+        logger.error("Failed to initialize SQLite database", error=str(e))
         raise
 
 
