@@ -12,7 +12,6 @@ alembic==1.12.1
 asyncpg==0.29.0
 
 # Vector Database and Embeddings
-pgvector==0.2.4
 chromadb==0.4.15
 sentence-transformers==2.2.2
 

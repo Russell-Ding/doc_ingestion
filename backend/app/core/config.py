@@ -65,11 +65,16 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 100
     
-    # RAG Configuration
-    VECTOR_DB_TYPE: str = "chroma"  # or "pinecone"
+    # RAG Configuration  
+    VECTOR_DB_TYPE: str = "chroma"  # ChromaDB only (no pgvector dependency)
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"
     MAX_RETRIEVED_CHUNKS: int = 10
     SIMILARITY_THRESHOLD: float = 0.7
+    
+    # ChromaDB Settings
+    CHROMA_HOST: str = "localhost" 
+    CHROMA_PORT: int = 8000
+    CHROMA_CLIENT_TYPE: str = "persistent"  # "persistent" or "http"
     
     # Content Generation
     ENABLE_CONTENT_VALIDATION: bool = True
