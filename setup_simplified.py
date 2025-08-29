@@ -139,10 +139,15 @@ POSTGRES_PASSWORD=postgres
 POSTGRES_DB=credit_reports
 POSTGRES_PORT=5432
 
-# AWS Configuration (REQUIRED - Replace with your values)
+# AWS Configuration - Two modes available:
+# Mode 1: Dynamic Bedrock Runtime (RECOMMENDED for dynamic keys)
+USE_DYNAMIC_BEDROCK_RUNTIME=true
+# BEDROCK_RUNTIME_FUNCTION_PATH=  # Optional: path to your function file
+
+# Mode 2: Static AWS Credentials (set USE_DYNAMIC_BEDROCK_RUNTIME=false to use)
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_aws_access_key_here
-AWS_SECRET_ACCESS_KEY=your_aws_secret_key_here
+# AWS_ACCESS_KEY_ID=your_aws_access_key_here
+# AWS_SECRET_ACCESS_KEY=your_aws_secret_key_here
 
 # S3 Bucket for document storage
 S3_BUCKET_NAME=credit-reports-documents
@@ -172,7 +177,7 @@ BEDROCK_COST_LIMIT_DAILY=100.0
         f.write(env_content)
     
     logger.info("Environment file created", path=str(env_path))
-    logger.warning("IMPORTANT: Update AWS credentials in backend/.env before running!")
+    logger.warning("IMPORTANT: Create bedrock_utils.py with your get_bedrockruntime function!")
     return True
 
 

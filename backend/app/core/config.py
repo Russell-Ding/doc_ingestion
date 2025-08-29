@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     
+    # Dynamic Bedrock Runtime Configuration
+    USE_DYNAMIC_BEDROCK_RUNTIME: bool = True  # Set to False to use static AWS credentials
+    BEDROCK_RUNTIME_FUNCTION_PATH: Optional[str] = None  # Path to your function module
+    
     # AWS S3 for file storage
     S3_BUCKET_NAME: str = "credit-reports-documents"
     S3_ENDPOINT_URL: Optional[str] = None  # For local MinIO development

@@ -1,6 +1,9 @@
 import json
 import asyncio
-from typing import List, Dict, Any, Optional, AsyncGenerator
+import importlib.util
+import sys
+from pathlib import Path
+from typing import List, Dict, Any, Optional, AsyncGenerator, Callable
 import boto3
 from botocore.exceptions import ClientError
 import structlog
@@ -12,7 +15,7 @@ logger = structlog.get_logger(__name__)
 
 
 class BedrockService:
-    """AWS Bedrock service for LLM interactions"""
+    """AWS Bedrock service for LLM interactions with dynamic runtime support"""
     
     def __init__(self):
         self.client = None
@@ -21,24 +24,132 @@ class BedrockService:
         self._last_reset = datetime.now().date()
         self._request_count = 0
         self._last_request_minute = datetime.now().minute
+        self._get_bedrock_runtime_func: Optional[Callable] = None
         
     async def initialize(self):
-        """Initialize Bedrock clients"""
+        """Initialize Bedrock clients using dynamic or static configuration"""
         try:
-            session = boto3.Session(
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                region_name=settings.AWS_REGION
+            if settings.USE_DYNAMIC_BEDROCK_RUNTIME:
+                await self._initialize_dynamic_runtime()
+            else:
+                await self._initialize_static_runtime()
+            
+            logger.info(
+                "Bedrock service initialized successfully",
+                mode="dynamic" if settings.USE_DYNAMIC_BEDROCK_RUNTIME else "static"
             )
-            
-            self.client = session.client('bedrock')
-            self.runtime_client = session.client('bedrock-runtime')
-            
-            logger.info("Bedrock service initialized successfully")
             
         except Exception as e:
             logger.error("Failed to initialize Bedrock service", error=str(e))
             raise
+    
+    async def _initialize_dynamic_runtime(self):
+        """Initialize using dynamic bedrock runtime function"""
+        try:
+            # Load the user's get_bedrockruntime function
+            self._get_bedrock_runtime_func = await self._load_bedrock_runtime_function()
+            
+            # Get initial runtime client
+            self.runtime_client = await self._get_runtime_client()
+            
+            # For the regular bedrock client, we'll create a basic session
+            # This is mainly used for model listing and management
+            session = boto3.Session(region_name=settings.AWS_REGION)
+            self.client = session.client('bedrock')
+            
+        except Exception as e:
+            logger.error("Failed to initialize dynamic Bedrock runtime", error=str(e))
+            raise
+    
+    async def _initialize_static_runtime(self):
+        """Initialize using static AWS credentials"""
+        session = boto3.Session(
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_REGION
+        )
+        
+        self.client = session.client('bedrock')
+        self.runtime_client = session.client('bedrock-runtime')
+    
+    async def _load_bedrock_runtime_function(self) -> Callable:
+        """Load the user's get_bedrockruntime function"""
+        try:
+            # Try to import from a local bedrock_utils module first
+            try:
+                import bedrock_utils
+                if hasattr(bedrock_utils, 'get_bedrockruntime'):
+                    logger.info("Loaded get_bedrockruntime from bedrock_utils module")
+                    return bedrock_utils.get_bedrockruntime
+            except ImportError:
+                pass
+            
+            # If function path is specified, load from there
+            if settings.BEDROCK_RUNTIME_FUNCTION_PATH:
+                function_path = Path(settings.BEDROCK_RUNTIME_FUNCTION_PATH)
+                
+                if function_path.exists():
+                    spec = importlib.util.spec_from_file_location("bedrock_module", function_path)
+                    bedrock_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(bedrock_module)
+                    
+                    if hasattr(bedrock_module, 'get_bedrockruntime'):
+                        logger.info("Loaded get_bedrockruntime from specified path", path=str(function_path))
+                        return bedrock_module.get_bedrockruntime
+                    else:
+                        raise ValueError(f"Function 'get_bedrockruntime' not found in {function_path}")
+                else:
+                    raise FileNotFoundError(f"Bedrock runtime function file not found: {function_path}")
+            
+            # Try to load from current working directory
+            cwd_bedrock = Path.cwd() / "bedrock_utils.py"
+            if cwd_bedrock.exists():
+                spec = importlib.util.spec_from_file_location("bedrock_utils", cwd_bedrock)
+                bedrock_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bedrock_module)
+                
+                if hasattr(bedrock_module, 'get_bedrockruntime'):
+                    logger.info("Loaded get_bedrockruntime from current directory")
+                    return bedrock_module.get_bedrockruntime
+            
+            raise ImportError(
+                "get_bedrockruntime function not found. Please either:\n"
+                "1. Create a bedrock_utils.py file with get_bedrockruntime function, or\n"
+                "2. Set BEDROCK_RUNTIME_FUNCTION_PATH in your .env file"
+            )
+            
+        except Exception as e:
+            logger.error("Failed to load bedrock runtime function", error=str(e))
+            raise
+    
+    async def _get_runtime_client(self):
+        """Get runtime client using the dynamic function"""
+        if self._get_bedrock_runtime_func:
+            try:
+                # Call the user's function to get the runtime client
+                runtime_client = self._get_bedrock_runtime_func()
+                
+                # If the function is async, await it
+                if asyncio.iscoroutine(runtime_client):
+                    runtime_client = await runtime_client
+                
+                return runtime_client
+                
+            except Exception as e:
+                logger.error("Failed to get bedrock runtime from user function", error=str(e))
+                raise
+        else:
+            raise RuntimeError("Bedrock runtime function not loaded")
+    
+    async def _refresh_runtime_client_if_needed(self):
+        """Refresh runtime client if using dynamic mode"""
+        if settings.USE_DYNAMIC_BEDROCK_RUNTIME and self._get_bedrock_runtime_func:
+            try:
+                # Refresh the runtime client for each request to ensure fresh credentials
+                self.runtime_client = await self._get_runtime_client()
+            except Exception as e:
+                logger.warning("Failed to refresh bedrock runtime client", error=str(e))
+                # Continue with existing client
     
     def _check_rate_limits(self) -> bool:
         """Check if we're within rate limits"""
@@ -90,6 +201,9 @@ class BedrockService:
         
         if not self.runtime_client:
             await self.initialize()
+        
+        # Refresh runtime client if using dynamic mode
+        await self._refresh_runtime_client_if_needed()
         
         max_tokens = max_tokens or settings.BEDROCK_MAX_TOKENS
         temperature = temperature or settings.BEDROCK_TEMPERATURE
@@ -159,6 +273,9 @@ class BedrockService:
         if not self.runtime_client:
             await self.initialize()
         
+        # Refresh runtime client if using dynamic mode
+        await self._refresh_runtime_client_if_needed()
+        
         embeddings = []
         
         try:
@@ -207,6 +324,9 @@ class BedrockService:
         
         if not self.runtime_client:
             await self.initialize()
+        
+        # Refresh runtime client if using dynamic mode
+        await self._refresh_runtime_client_if_needed()
         
         max_tokens = max_tokens or settings.BEDROCK_MAX_TOKENS
         temperature = temperature or settings.BEDROCK_TEMPERATURE
