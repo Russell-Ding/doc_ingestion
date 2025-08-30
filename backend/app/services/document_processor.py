@@ -366,21 +366,36 @@ class DocumentProcessor:
                 chunk_type="table"
             )
         
-        # Convert table to DataFrame for processing
-        df = pd.DataFrame(table_data[1:], columns=table_data[0])
-        
-        # Create human-readable content
-        content = f"Table: {section_title or 'Unnamed'}\n\n"
-        content += df.to_string(index=False)
-        
-        # Store structured data
-        table_metadata = {
-            "headers": table_data[0],
-            "rows": table_data[1:],
-            "row_count": len(table_data) - 1,
-            "column_count": len(table_data[0]),
-            "summary_stats": self._generate_table_stats(df)
-        }
+        try:
+            # Convert table to DataFrame for processing
+            df = pd.DataFrame(table_data[1:], columns=table_data[0])
+            
+            # Create human-readable content
+            content = f"Table: {section_title or 'Unnamed'}\n\n"
+            content += df.to_string(index=False)
+            
+            # Store structured data
+            table_metadata = {
+                "headers": table_data[0],
+                "rows": table_data[1:],
+                "row_count": len(table_data) - 1,
+                "column_count": len(table_data[0]),
+                "summary_stats": self._generate_table_stats(df)
+            }
+        except Exception as e:
+            logger.warning(f"Error processing table data: {str(e)}")
+            # Fallback to simple text representation
+            content = f"Table: {section_title or 'Unnamed'}\n\n"
+            for row in table_data:
+                content += " | ".join(str(cell) for cell in row) + "\n"
+            
+            table_metadata = {
+                "headers": table_data[0] if table_data else [],
+                "rows": table_data[1:] if len(table_data) > 1 else [],
+                "row_count": len(table_data) - 1 if table_data else 0,
+                "column_count": len(table_data[0]) if table_data else 0,
+                "summary_stats": {}
+            }
         
         return DocumentChunk(
             content=content,
@@ -416,7 +431,7 @@ class DocumentProcessor:
             "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
             "row_count": len(df),
             "column_count": len(df.columns),
-            "summary_stats": df.describe().to_dict() if not df.select_dtypes(include=['number']).empty else {},
+            "summary_stats": numeric_df.describe().to_dict() if not numeric_df.empty else {},
             "sample_data": df.head(5).to_dict('records')
         }
         
@@ -522,20 +537,31 @@ class DocumentProcessor:
         stats = {}
         
         for column in df.columns:
-            col_stats = {"type": str(df[column].dtype)}
-            
-            if df[column].dtype in ['int64', 'float64']:
-                col_stats.update({
-                    "mean": float(df[column].mean()) if not df[column].isna().all() else None,
-                    "std": float(df[column].std()) if not df[column].isna().all() else None,
-                    "min": float(df[column].min()) if not df[column].isna().all() else None,
-                    "max": float(df[column].max()) if not df[column].isna().all() else None,
-                })
-            
-            col_stats["null_count"] = int(df[column].isna().sum())
-            col_stats["unique_count"] = int(df[column].nunique())
-            
-            stats[column] = col_stats
+            try:
+                col_dtype = str(df[column].dtype)
+                col_stats = {"type": col_dtype}
+                
+                # Check if column is numeric
+                if pd.api.types.is_numeric_dtype(df[column]):
+                    try:
+                        col_stats.update({
+                            "mean": float(df[column].mean()) if not df[column].isna().all() else None,
+                            "std": float(df[column].std()) if not df[column].isna().all() else None,
+                            "min": float(df[column].min()) if not df[column].isna().all() else None,
+                            "max": float(df[column].max()) if not df[column].isna().all() else None,
+                        })
+                    except Exception:
+                        # Skip statistics if they can't be computed
+                        pass
+                
+                col_stats["null_count"] = int(df[column].isna().sum())
+                col_stats["unique_count"] = int(df[column].nunique())
+                
+                stats[str(column)] = col_stats
+            except Exception as e:
+                # Skip this column if there's any issue
+                logger.warning(f"Skipping stats for column {column}: {str(e)}")
+                stats[str(column)] = {"type": "unknown", "error": str(e)}
         
         return stats
     
