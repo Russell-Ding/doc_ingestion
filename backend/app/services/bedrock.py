@@ -280,8 +280,22 @@ class BedrockService:
         
         try:
             for text in texts:
+                # Truncate text if it exceeds Bedrock's limit (50,000 characters)
+                MAX_EMBEDDING_LENGTH = settings.MAX_EMBEDDING_TEXT_LENGTH
+                
+                if len(text) > MAX_EMBEDDING_LENGTH:
+                    logger.warning(
+                        "Text too long for embedding, truncating", 
+                        original_length=len(text),
+                        truncated_length=MAX_EMBEDDING_LENGTH
+                    )
+                    # Truncate and add indicator
+                    truncated_text = text[:MAX_EMBEDDING_LENGTH-50] + "... [Content truncated due to length]"
+                else:
+                    truncated_text = text
+                
                 body = {
-                    "inputText": text
+                    "inputText": truncated_text
                 }
                 
                 response = self.runtime_client.invoke_model(

@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 100
     
+    # Large File Processing Limits
+    MAX_EXCEL_CONTENT_LENGTH: int = 10000  # Max chars for Excel content before truncation
+    MAX_EXCEL_ROWS_FOR_FULL_DATA: int = 50  # Max rows to include full data
+    MAX_EMBEDDING_TEXT_LENGTH: int = 49000  # Max chars for embedding (Bedrock limit is 50k)
+    
     # RAG Configuration  
     VECTOR_DB_TYPE: str = "chroma"  # ChromaDB only (no pgvector dependency)
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

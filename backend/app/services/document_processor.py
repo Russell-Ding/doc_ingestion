@@ -417,12 +417,44 @@ class DocumentProcessor:
         # Create detailed content
         content = f"Excel Table: {sheet_name}\n\n"
         
+        # Add basic info
+        content += f"Dimensions: {df.shape[0]} rows × {df.shape[1]} columns\n"
+        content += f"Columns: {', '.join(df.columns.astype(str))}\n\n"
+        
         # Add data summary only if there are numeric columns
         numeric_df = df.select_dtypes(include=['number'])
         if not numeric_df.empty:
             content += f"Data Summary:\n{numeric_df.describe().to_string()}\n\n"
         
-        content += f"Full Data:\n{df.to_string(index=False)}"
+        # For large datasets, only include a sample to avoid exceeding embedding limits
+        MAX_ROWS_FOR_FULL_DATA = settings.MAX_EXCEL_ROWS_FOR_FULL_DATA
+        MAX_CONTENT_LENGTH = settings.MAX_EXCEL_CONTENT_LENGTH
+        
+        if len(df) > MAX_ROWS_FOR_FULL_DATA:
+            # Include header + first few rows + last few rows for large datasets
+            sample_df = pd.concat([
+                df.head(20),  # First 20 rows
+                df.tail(10)   # Last 10 rows
+            ])
+            
+            content += f"Data Sample (first 20 and last 10 rows out of {len(df)} total):\n"
+            sample_content = sample_df.to_string(index=False)
+            
+            # If still too long, truncate
+            if len(sample_content) > MAX_CONTENT_LENGTH:
+                sample_content = sample_content[:MAX_CONTENT_LENGTH] + "...\n[Content truncated due to size]"
+            
+            content += sample_content
+        else:
+            # For smaller datasets, include all data but with length check
+            full_data = df.to_string(index=False)
+            
+            if len(full_data) > MAX_CONTENT_LENGTH:
+                # Even small datasets can have wide columns, so truncate if needed
+                content += f"Data Sample (truncated due to width):\n"
+                content += full_data[:MAX_CONTENT_LENGTH] + "...\n[Content truncated due to width]"
+            else:
+                content += f"Full Data:\n{full_data}"
         
         # Store structured data
         table_metadata = {
@@ -452,8 +484,9 @@ class DocumentProcessor:
         """Create individual chunks for significant rows"""
         chunks = []
         
-        # Only create row chunks for data with identifiable patterns
-        if len(df) > 10:  # Only for larger datasets
+        # Only create row chunks for moderately sized datasets
+        # Skip row chunks for very large datasets to avoid overwhelming the system
+        if 10 < len(df) < 1000:  # Only for datasets between 10-1000 rows
             # Sample every 10th row or important rows
             sample_indices = range(0, len(df), max(1, len(df) // 10))
             
@@ -464,16 +497,27 @@ class DocumentProcessor:
                 row = df.iloc[row_idx]
                 content = f"Row {row_idx + 1} from {sheet_name}:\n"
                 
+                # Limit the length of each row representation
+                MAX_ROW_CONTENT_LENGTH = 2000
+                current_content = content
+                
                 for col, value in row.items():
-                    content += f"{col}: {value}\n"
+                    addition = f"{col}: {value}\n"
+                    if len(current_content + addition) > MAX_ROW_CONTENT_LENGTH:
+                        current_content += "... [Row content truncated due to length]\n"
+                        break
+                    current_content += addition
                 
                 chunk = DocumentChunk(
-                    content=content,
+                    content=current_content,
                     chunk_index=start_index + i,
                     section_title=f"Sheet: {sheet_name}",
                     chunk_type="table_row"
                 )
                 chunks.append(chunk)
+        elif len(df) >= 1000:
+            # For very large datasets, log that row chunks are skipped
+            logger.info(f"Skipping row chunk creation for large dataset: {len(df)} rows in {sheet_name}")
         
         return chunks
     
