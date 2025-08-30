@@ -70,7 +70,7 @@ def reset_chromadb():
             print(f"✅ Created collection: {name}")
         
         print("\n✅ ChromaDB reset complete!")
-        print("📝 Note: The collections are now ready for 1024-dimensional embeddings (Titan Embed v1)")
+        print("📝 Note: The collections are now ready for 1024-dimensional embeddings (Titan Embed v2)")
         print("🚀 You can now restart your backend and upload documents.")
         
     except Exception as e:

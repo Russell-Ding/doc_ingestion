@@ -162,8 +162,8 @@ CHROMA_PERSIST_DIRECTORY=./chroma_db
 VECTOR_DB_TYPE=chroma
 
 # Bedrock Models
-BEDROCK_TEXT_MODEL=anthropic.claude-3-sonnet-20240229-v1:0
-BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v1
+BEDROCK_TEXT_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
+BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
 
 # Redis (optional - for background tasks)
 REDIS_URL=redis://localhost:6379/0

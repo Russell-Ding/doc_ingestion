@@ -71,8 +71,8 @@ A comprehensive AI-powered toolkit designed to help credit risk managers generat
    AWS_SECRET_ACCESS_KEY=your_secret_key
    
    # Bedrock Models
-   BEDROCK_TEXT_MODEL=anthropic.claude-3-sonnet-20240229-v1:0
-   BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v1
+   BEDROCK_TEXT_MODEL=us.anthropic.claude-sonnet-4-20250514-v1:0
+   BEDROCK_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
    
    # Storage
    S3_BUCKET_NAME=your-documents-bucket
@@ -167,8 +167,8 @@ A comprehensive AI-powered toolkit designed to help credit risk managers generat
 
 ```python
 # In app/core/config.py
-BEDROCK_TEXT_MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
-BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v1"
+BEDROCK_TEXT_MODEL = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 BEDROCK_MAX_TOKENS = 4000
 BEDROCK_TEMPERATURE = 0.7
 ```

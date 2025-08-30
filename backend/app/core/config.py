@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     S3_ENDPOINT_URL: Optional[str] = None  # For local MinIO development
     
     # AWS Bedrock Models
-    BEDROCK_TEXT_MODEL: str = "anthropic.claude-3-sonnet-20240229-v1:0"
-    BEDROCK_EMBEDDING_MODEL: str = "amazon.titan-embed-text-v1"
-    BEDROCK_EMBEDDING_DIMENSION: int = 1024  # Titan Embed v1 dimension
+    BEDROCK_TEXT_MODEL: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    BEDROCK_EMBEDDING_MODEL: str = "amazon.titan-embed-text-v2:0"
+    BEDROCK_EMBEDDING_DIMENSION: int = 1024  # Titan Embed v2 dimension (same as v1)
     BEDROCK_MAX_TOKENS: int = 4000
     BEDROCK_TEMPERATURE: float = 0.7
     
