@@ -457,14 +457,20 @@ class DocumentProcessor:
                 content += f"Full Data:\n{full_data}"
         
         # Store structured data
+        # Convert any datetime objects to strings for JSON serialization
+        sample_df = df.head(5).copy()
+        for col in sample_df.columns:
+            if pd.api.types.is_datetime64_any_dtype(sample_df[col]):
+                sample_df[col] = sample_df[col].astype(str)
+        
         table_metadata = {
             "sheet_name": sheet_name,
-            "headers": df.columns.tolist(),
-            "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "headers": [str(h) for h in df.columns.tolist()],  # Ensure headers are strings
+            "data_types": {str(col): str(dtype) for col, dtype in df.dtypes.items()},
             "row_count": len(df),
             "column_count": len(df.columns),
             "summary_stats": numeric_df.describe().to_dict() if not numeric_df.empty else {},
-            "sample_data": df.head(5).to_dict('records')
+            "sample_data": sample_df.to_dict('records')
         }
         
         return DocumentChunk(

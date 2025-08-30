@@ -205,10 +205,10 @@ class RAGSystem:
             }
             
             if chunk.page_number:
-                metadata["page_number"] = chunk.page_number
+                metadata["page_number"] = int(chunk.page_number) if chunk.page_number else None
             
             if chunk.section_title:
-                metadata["section_title"] = chunk.section_title
+                metadata["section_title"] = str(chunk.section_title) if chunk.section_title else None
             
             metadatas.append(metadata)
         
@@ -256,16 +256,26 @@ class RAGSystem:
             }
             
             if chunk.page_number:
-                metadata["page_number"] = chunk.page_number
+                metadata["page_number"] = int(chunk.page_number) if chunk.page_number else None
             
             if chunk.section_title:
-                metadata["section_title"] = chunk.section_title
+                metadata["section_title"] = str(chunk.section_title) if chunk.section_title else None
             
             if chunk.table_data:
                 # Store essential table metadata
                 metadata["table_row_count"] = chunk.table_data.get("row_count", 0)
                 metadata["table_column_count"] = chunk.table_data.get("column_count", 0)
-                metadata["table_headers"] = json.dumps(chunk.table_data.get("headers", []))
+                
+                # Safely serialize headers (might contain datetime or other non-JSON types)
+                try:
+                    headers = chunk.table_data.get("headers", [])
+                    # Convert any non-string headers to strings
+                    headers = [str(h) for h in headers]
+                    metadata["table_headers"] = json.dumps(headers)
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Could not serialize table headers: {e}")
+                    metadata["table_headers"] = "[]"
+                
                 # Store full table data separately (ChromaDB has metadata size limits)
                 metadata["has_table_data"] = True
             
