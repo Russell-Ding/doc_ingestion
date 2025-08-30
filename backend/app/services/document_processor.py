@@ -401,17 +401,22 @@ class DocumentProcessor:
         
         # Create detailed content
         content = f"Excel Table: {sheet_name}\n\n"
-        content += f"Data Summary:\n{df.describe().to_string()}\n\n"
+        
+        # Add data summary only if there are numeric columns
+        numeric_df = df.select_dtypes(include=['number'])
+        if not numeric_df.empty:
+            content += f"Data Summary:\n{numeric_df.describe().to_string()}\n\n"
+        
         content += f"Full Data:\n{df.to_string(index=False)}"
         
         # Store structured data
         table_metadata = {
             "sheet_name": sheet_name,
             "headers": df.columns.tolist(),
-            "data_types": df.dtypes.to_dict(),
+            "data_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
             "row_count": len(df),
             "column_count": len(df.columns),
-            "summary_stats": df.describe().to_dict(),
+            "summary_stats": df.describe().to_dict() if not df.select_dtypes(include=['number']).empty else {},
             "sample_data": df.head(5).to_dict('records')
         }
         
