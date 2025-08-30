@@ -5,6 +5,7 @@ import structlog
 from pathlib import Path
 import aiofiles
 import uuid
+import os
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -45,8 +46,10 @@ async def upload_document(
     try:
         # Generate document ID and file path
         document_id = str(uuid.uuid4())
-        upload_dir = Path("backend/uploads")
-        upload_dir.mkdir(exist_ok=True)
+        # Get the base directory (backend folder)
+        base_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
+        upload_dir = base_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
         
         file_path = upload_dir / f"{document_id}_{file.filename}"
         
