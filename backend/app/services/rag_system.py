@@ -54,21 +54,8 @@ class RAGSystem:
                     settings=ChromaSettings(anonymized_telemetry=False)
                 )
             
-            # Create collections for different content types
-            self.text_collection = self.chroma_client.get_or_create_collection(
-                name="document_text",
-                metadata={"description": "Text content from documents"}
-            )
-            
-            self.table_collection = self.chroma_client.get_or_create_collection(
-                name="document_tables",
-                metadata={"description": "Table and structured data from documents"}
-            )
-            
-            self.metadata_collection = self.chroma_client.get_or_create_collection(
-                name="document_metadata",
-                metadata={"description": "Document metadata and summaries"}
-            )
+            # Check and recreate collections if dimension mismatch
+            await self._ensure_correct_collections()
             
             self._initialized = True
             logger.info("RAG system initialized successfully")
@@ -76,6 +63,61 @@ class RAGSystem:
         except Exception as e:
             logger.error("Failed to initialize RAG system", error=str(e))
             raise
+    
+    async def _ensure_correct_collections(self):
+        """Ensure collections exist with correct embedding dimensions"""
+        collections_to_create = [
+            ("document_text", "Text content from documents"),
+            ("document_tables", "Table and structured data from documents"),
+            ("document_metadata", "Document metadata and summaries")
+        ]
+        
+        for collection_name, description in collections_to_create:
+            try:
+                # Try to get existing collection
+                collection = self.chroma_client.get_collection(collection_name)
+                
+                # Check if collection has data and verify dimensions
+                if collection.count() > 0:
+                    # Try to peek at the data to check dimensions
+                    try:
+                        result = collection.peek(1)
+                        if result and 'embeddings' in result and result['embeddings']:
+                            existing_dim = len(result['embeddings'][0])
+                            expected_dim = settings.BEDROCK_EMBEDDING_DIMENSION
+                            
+                            if existing_dim != expected_dim:
+                                logger.warning(
+                                    f"Collection {collection_name} has wrong dimensions",
+                                    existing=existing_dim,
+                                    expected=expected_dim
+                                )
+                                # Delete and recreate collection
+                                self.chroma_client.delete_collection(collection_name)
+                                logger.info(f"Deleted collection {collection_name} due to dimension mismatch")
+                                collection = self.chroma_client.create_collection(
+                                    name=collection_name,
+                                    metadata={"description": description, "dimension": expected_dim}
+                                )
+                                logger.info(f"Recreated collection {collection_name} with {expected_dim} dimensions")
+                    except Exception as e:
+                        logger.warning(f"Could not check dimensions for {collection_name}: {e}")
+                
+            except Exception:
+                # Collection doesn't exist, create it
+                collection = self.chroma_client.create_collection(
+                    name=collection_name,
+                    metadata={"description": description, "dimension": settings.BEDROCK_EMBEDDING_DIMENSION}
+                )
+                logger.info(f"Created new collection {collection_name}")
+            
+            # Assign to appropriate attribute
+            if collection_name == "document_text":
+                self.text_collection = collection
+            elif collection_name == "document_tables":
+                self.table_collection = collection
+            elif collection_name == "document_metadata":
+                self.metadata_collection = collection
     
     async def add_document_chunks(
         self,
@@ -170,12 +212,25 @@ class RAGSystem:
             
             metadatas.append(metadata)
         
-        self.text_collection.add(
-            ids=chunk_ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        try:
+            self.text_collection.add(
+                ids=chunk_ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas
+            )
+        except Exception as e:
+            if "dimensionality" in str(e).lower():
+                logger.error(
+                    "Dimension mismatch error. Collection needs to be reset.",
+                    error=str(e)
+                )
+                raise ValueError(
+                    f"Embedding dimension mismatch. The collection expects different dimensions. "
+                    f"Please run 'python reset_chromadb.py' to reset the collections, "
+                    f"or delete the ./chroma_db directory and restart the backend."
+                )
+            raise
     
     async def _add_table_chunks(
         self,
@@ -216,12 +271,25 @@ class RAGSystem:
             
             metadatas.append(metadata)
         
-        self.table_collection.add(
-            ids=chunk_ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        try:
+            self.table_collection.add(
+                ids=chunk_ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas
+            )
+        except Exception as e:
+            if "dimensionality" in str(e).lower():
+                logger.error(
+                    "Dimension mismatch error in table collection. Collection needs to be reset.",
+                    error=str(e)
+                )
+                raise ValueError(
+                    f"Embedding dimension mismatch in table collection. "
+                    f"Please run 'python reset_chromadb.py' to reset the collections, "
+                    f"or delete the ./chroma_db directory and restart the backend."
+                )
+            raise
     
     async def _add_document_metadata(
         self,
@@ -235,17 +303,30 @@ class RAGSystem:
         summary_text = f"Document: {document_name}, Total chunks: {chunk_count}"
         embeddings = await bedrock_service.generate_embeddings([summary_text])
         
-        self.metadata_collection.add(
-            ids=[document_id],
-            embeddings=embeddings,
-            documents=[summary_text],
-            metadatas=[{
-                "document_id": document_id,
-                "document_name": document_name,
-                "chunk_count": chunk_count,
-                "added_date": datetime.now().isoformat()
-            }]
-        )
+        try:
+            self.metadata_collection.add(
+                ids=[document_id],
+                embeddings=embeddings,
+                documents=[summary_text],
+                metadatas=[{
+                    "document_id": document_id,
+                    "document_name": document_name,
+                    "chunk_count": chunk_count,
+                    "added_date": datetime.now().isoformat()
+                }]
+            )
+        except Exception as e:
+            if "dimensionality" in str(e).lower():
+                logger.error(
+                    "Dimension mismatch error in metadata collection. Collection needs to be reset.",
+                    error=str(e)
+                )
+                raise ValueError(
+                    f"Embedding dimension mismatch in metadata collection. "
+                    f"Please run 'python reset_chromadb.py' to reset the collections, "
+                    f"or delete the ./chroma_db directory and restart the backend."
+                )
+            raise
     
     async def retrieve_relevant_chunks(
         self,

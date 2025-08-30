@@ -16,7 +16,22 @@ def reset_chromadb():
     print("🔄 Resetting ChromaDB collections...")
     
     # Get the ChromaDB persist directory from config
-    persist_dir = "./chroma_db"  # Default from config
+    # Check multiple possible locations
+    possible_dirs = [
+        "./chroma_db",
+        "./backend/chroma_db", 
+        "../chroma_db"  # If running from backend directory
+    ]
+    
+    persist_dir = None
+    for check_dir in possible_dirs:
+        if Path(check_dir).exists():
+            persist_dir = check_dir
+            break
+    
+    # If none exist, use the default from config
+    if not persist_dir:
+        persist_dir = "./chroma_db"
     
     # Check if directory exists
     persist_path = Path(persist_dir)
