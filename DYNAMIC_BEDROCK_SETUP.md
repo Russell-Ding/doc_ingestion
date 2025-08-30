@@ -6,7 +6,7 @@ This guide shows how to configure the system to use your dynamic key function in
 
 The system now supports **two modes** for AWS Bedrock authentication:
 
-1. **Dynamic Runtime Mode** (recommended for your use case) - Uses your `get_bedrockruntime` function
+1. **Dynamic Runtime Mode** (recommended for your use case) - Uses your `get_runtime` function
 2. **Static Credentials Mode** - Uses traditional AWS access keys
 
 ## 🛠️ Setup for Dynamic Mode
@@ -38,7 +38,7 @@ AWS_REGION=us-east-1
 # bedrock_utils.py
 import boto3
 
-def get_bedrockruntime():
+def get_runtime():
     """
     Your custom function to get Bedrock runtime with dynamic credentials
     Replace this with your actual implementation
@@ -68,7 +68,7 @@ BEDROCK_RUNTIME_FUNCTION_PATH=/path/to/your/existing_bedrock_script.py
 
 ### Step 3: Function Requirements
 
-Your `get_bedrockruntime` function should:
+Your `get_runtime` function should:
 
 - **Return**: A configured `boto3.client('bedrock-runtime')` 
 - **Handle**: Dynamic credential fetching
@@ -78,7 +78,7 @@ Your `get_bedrockruntime` function should:
 
 ```python
 # Sync version
-def get_bedrockruntime():
+def get_runtime():
     # Your credential fetching logic
     creds = get_latest_aws_credentials()
     
@@ -90,7 +90,7 @@ def get_bedrockruntime():
     )
 
 # Async version (optional)
-async def get_bedrockruntime():
+async def get_runtime():
     # Your async credential fetching
     creds = await get_latest_aws_credentials_async()
     
@@ -104,7 +104,7 @@ async def get_bedrockruntime():
 
 ## 🔄 How It Works
 
-1. **System Startup**: Loads your `get_bedrockruntime` function
+1. **System Startup**: Loads your `get_runtime` function
 2. **Each AI Request**: Calls your function to get fresh credentials
 3. **Automatic Refresh**: Ensures always-current credentials for Bedrock calls
 4. **Error Handling**: Falls back gracefully if credential refresh fails
@@ -123,10 +123,10 @@ Test your dynamic function:
 
 ```python
 # Test script
-from bedrock_utils import get_bedrockruntime
+from bedrock_utils import get_runtime
 
 # Test the function
-client = get_bedrockruntime()
+client = get_runtime()
 print("✅ Bedrock runtime client created successfully")
 
 # Test with a simple call
@@ -142,7 +142,7 @@ except Exception as e:
 ### Multiple Credential Sources
 
 ```python
-def get_bedrockruntime():
+def get_runtime():
     """Handle multiple credential sources with fallback"""
     
     # Try primary source
@@ -176,7 +176,7 @@ from datetime import datetime, timedelta
 _cached_client = None
 _cache_expiry = None
 
-def get_bedrockruntime():
+def get_runtime():
     """Get bedrock client with 1-hour caching"""
     global _cached_client, _cache_expiry
     
@@ -221,7 +221,7 @@ After setup, check the logs when starting the backend:
 ```bash
 # Start backend and look for these log messages:
 # ✅ "Bedrock service initialized successfully mode=dynamic"
-# ✅ "Loaded get_bedrockruntime from bedrock_utils module"
+# ✅ "Loaded get_runtime from bedrock_utils module"
 ```
 
 Your system is now configured to use dynamic Bedrock credentials! 🎉

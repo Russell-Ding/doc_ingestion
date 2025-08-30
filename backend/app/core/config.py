@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # AWS Bedrock Models
     BEDROCK_TEXT_MODEL: str = "anthropic.claude-3-sonnet-20240229-v1:0"
     BEDROCK_EMBEDDING_MODEL: str = "amazon.titan-embed-text-v1"
+    BEDROCK_EMBEDDING_DIMENSION: int = 1024  # Titan Embed v1 dimension
     BEDROCK_MAX_TOKENS: int = 4000
     BEDROCK_TEMPERATURE: float = 0.7
     

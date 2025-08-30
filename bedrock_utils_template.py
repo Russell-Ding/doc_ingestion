@@ -6,7 +6,7 @@ Copy this file and implement your get_bedrockruntime function
 import boto3
 from typing import Any
 
-def get_bedrockruntime():
+def get_runtime():
     """
     Your custom function to get Bedrock runtime client with dynamic credentials
     
@@ -50,16 +50,16 @@ def get_bedrockruntime():
     
     # PLACEHOLDER: Replace this with your actual implementation
     raise NotImplementedError(
-        "Please implement your get_bedrockruntime function. "
+        "Please implement your get_runtime function. "
         "This function should return a boto3 bedrock-runtime client "
         "with your dynamic credentials."
     )
 
 
 # Optional: Async version if your credential fetching is async
-async def get_bedrockruntime_async():
+async def get_runtime_async():
     """
-    Async version of get_bedrockruntime if you need to await credential fetching
+    Async version of get_runtime if you need to await credential fetching
     
     Returns:
         boto3.client: A configured bedrock-runtime client

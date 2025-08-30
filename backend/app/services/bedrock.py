@@ -46,7 +46,7 @@ class BedrockService:
     async def _initialize_dynamic_runtime(self):
         """Initialize using dynamic bedrock runtime function"""
         try:
-            # Load the user's get_bedrockruntime function
+            # Load the user's get_runtime function
             self._get_bedrock_runtime_func = await self._load_bedrock_runtime_function()
             
             # Get initial runtime client
@@ -73,14 +73,14 @@ class BedrockService:
         self.runtime_client = session.client('bedrock-runtime')
     
     async def _load_bedrock_runtime_function(self) -> Callable:
-        """Load the user's get_bedrockruntime function"""
+        """Load the user's get_runtime function"""
         try:
             # Try to import from a local bedrock_utils module first
             try:
                 import bedrock_utils
-                if hasattr(bedrock_utils, 'get_bedrockruntime'):
-                    logger.info("Loaded get_bedrockruntime from bedrock_utils module")
-                    return bedrock_utils.get_bedrockruntime
+                if hasattr(bedrock_utils, 'get_runtime'):
+                    logger.info("Loaded get_runtime from bedrock_utils module")
+                    return bedrock_utils.get_runtime
             except ImportError:
                 pass
             
@@ -93,11 +93,11 @@ class BedrockService:
                     bedrock_module = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(bedrock_module)
                     
-                    if hasattr(bedrock_module, 'get_bedrockruntime'):
-                        logger.info("Loaded get_bedrockruntime from specified path", path=str(function_path))
-                        return bedrock_module.get_bedrockruntime
+                    if hasattr(bedrock_module, 'get_runtime'):
+                        logger.info("Loaded get_runtime from specified path", path=str(function_path))
+                        return bedrock_module.get_runtime
                     else:
-                        raise ValueError(f"Function 'get_bedrockruntime' not found in {function_path}")
+                        raise ValueError(f"Function 'get_runtime' not found in {function_path}")
                 else:
                     raise FileNotFoundError(f"Bedrock runtime function file not found: {function_path}")
             
@@ -108,13 +108,13 @@ class BedrockService:
                 bedrock_module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(bedrock_module)
                 
-                if hasattr(bedrock_module, 'get_bedrockruntime'):
-                    logger.info("Loaded get_bedrockruntime from current directory")
-                    return bedrock_module.get_bedrockruntime
+                if hasattr(bedrock_module, 'get_runtime'):
+                    logger.info("Loaded get_runtime from current directory")
+                    return bedrock_module.get_runtime
             
             raise ImportError(
-                "get_bedrockruntime function not found. Please either:\n"
-                "1. Create a bedrock_utils.py file with get_bedrockruntime function, or\n"
+                "get_runtime function not found. Please either:\n"
+                "1. Create a bedrock_utils.py file with get_runtime function, or\n"
                 "2. Set BEDROCK_RUNTIME_FUNCTION_PATH in your .env file"
             )
             
@@ -298,7 +298,7 @@ class BedrockService:
                     embeddings.append(embedding)
                 else:
                     logger.warning("Empty embedding received for text", text_length=len(text))
-                    embeddings.append([0.0] * 1536)  # Default embedding size
+                    embeddings.append([0.0] * settings.BEDROCK_EMBEDDING_DIMENSION)  # Use configured dimension
             
             logger.info("Embeddings generated", count=len(embeddings))
             return embeddings

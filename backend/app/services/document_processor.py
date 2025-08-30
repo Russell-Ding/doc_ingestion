@@ -530,7 +530,7 @@ class DocumentProcessor:
             logger.error("Failed to generate embeddings", error=str(e))
             # Set empty embeddings as fallback
             for chunk in chunks:
-                chunk.embeddings = [0.0] * 1536
+                chunk.embeddings = [0.0] * settings.BEDROCK_EMBEDDING_DIMENSION
     
     def _generate_table_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
         """Generate summary statistics for table data"""

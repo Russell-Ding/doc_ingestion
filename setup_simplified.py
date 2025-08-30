@@ -177,7 +177,7 @@ BEDROCK_COST_LIMIT_DAILY=100.0
         f.write(env_content)
     
     logger.info("Environment file created", path=str(env_path))
-    logger.warning("IMPORTANT: Create bedrock_utils.py with your get_bedrockruntime function!")
+    logger.warning("IMPORTANT: Create bedrock_utils.py with your get_runtime function!")
     return True
 
 

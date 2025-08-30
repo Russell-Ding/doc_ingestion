@@ -89,6 +89,22 @@ class RAGSystem:
             await self.initialize()
         
         try:
+            # Validate embedding dimensions
+            if chunks and chunks[0].embeddings:
+                actual_dim = len(chunks[0].embeddings)
+                expected_dim = settings.BEDROCK_EMBEDDING_DIMENSION
+                
+                if actual_dim != expected_dim:
+                    logger.error(
+                        "Embedding dimension mismatch",
+                        actual=actual_dim,
+                        expected=expected_dim
+                    )
+                    raise ValueError(
+                        f"Embedding dimension mismatch: got {actual_dim}, "
+                        f"expected {expected_dim}. Run reset_chromadb.py to fix."
+                    )
+            
             # Separate chunks by type
             text_chunks = []
             table_chunks = []
