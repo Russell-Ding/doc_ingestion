@@ -68,11 +68,12 @@ async def upload_document(
             document_id=document_id
         )
         
-        # Add to RAG system
+        # Add to RAG system with file size metadata
         await rag_system.add_document_chunks(
             chunks=chunks,
             document_id=document_id,
-            document_name=document_name or file.filename or "untitled"
+            document_name=document_name or file.filename or "untitled",
+            file_size=file_size
         )
         
         logger.info(
@@ -109,14 +110,37 @@ async def list_documents(
 ):
     """List all uploaded documents"""
     
-    # In a real implementation, this would query the database
-    # For now, return a placeholder response
-    return {
-        "documents": [],
-        "total": 0,
-        "skip": skip,
-        "limit": limit
-    }
+    try:
+        # Get documents from RAG system
+        result = await rag_system.list_all_documents(skip=skip, limit=limit)
+        
+        # Format documents for frontend
+        documents = []
+        for doc in result["documents"]:
+            documents.append({
+                "id": doc["document_id"],
+                "name": doc["document_name"],
+                "chunk_count": doc["chunk_count"],
+                "upload_date": doc["added_date"],
+                "size": doc.get("file_size", 0),
+                "status": "completed"  # All stored docs are completed
+            })
+        
+        return {
+            "documents": documents,
+            "total": result["total"],
+            "skip": skip,
+            "limit": limit
+        }
+        
+    except Exception as e:
+        logger.error("Failed to list documents", error=str(e))
+        return {
+            "documents": [],
+            "total": 0,
+            "skip": skip,
+            "limit": limit
+        }
 
 
 @router.get("/{document_id}")

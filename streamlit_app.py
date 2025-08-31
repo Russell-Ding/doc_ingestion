@@ -170,10 +170,10 @@ if page == "📄 Document Upload":
         for doc in documents:
             doc_data.append({
                 "Name": doc.get("name", "Unknown"),
-                "Type": doc.get("document_type", "").upper(),
-                "Status": doc.get("processing_status", "unknown"),
-                "Size": f"{doc.get('file_size_bytes', 0) / 1024:.1f} KB",
-                "Pages": doc.get("page_count", "N/A")
+                "Chunks": doc.get("chunk_count", 0),
+                "Status": doc.get("status", "unknown"),
+                "Size": f"{doc.get('size', 0) / 1024:.1f} KB" if doc.get('size', 0) > 0 else "Unknown",
+                "Upload Date": doc.get("upload_date", "Unknown")
             })
         
         df = pd.DataFrame(doc_data)

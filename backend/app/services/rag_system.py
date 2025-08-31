@@ -123,7 +123,8 @@ class RAGSystem:
         self,
         chunks: List[DocumentChunk],
         document_id: str,
-        document_name: str
+        document_name: str,
+        file_size: int = 0
     ):
         """Add document chunks to the appropriate collections"""
         
@@ -168,7 +169,7 @@ class RAGSystem:
                 await self._add_table_chunks(table_chunks, document_id, document_name)
             
             # Add document metadata
-            await self._add_document_metadata(document_id, document_name, len(chunks))
+            await self._add_document_metadata(document_id, document_name, len(chunks), file_size)
             
             logger.info(
                 "Document chunks added to RAG system",
@@ -305,7 +306,8 @@ class RAGSystem:
         self,
         document_id: str,
         document_name: str,
-        chunk_count: int
+        chunk_count: int,
+        file_size: int = 0
     ):
         """Add document-level metadata"""
         
@@ -322,7 +324,8 @@ class RAGSystem:
                     "document_id": document_id,
                     "document_name": document_name,
                     "chunk_count": chunk_count,
-                    "added_date": datetime.now().isoformat()
+                    "added_date": datetime.now().isoformat(),
+                    "file_size": file_size
                 }]
             )
         except Exception as e:
@@ -596,6 +599,51 @@ class RAGSystem:
         
         # Return top results
         return ranked_results[:max_results]
+    
+    async def list_all_documents(self, skip: int = 0, limit: int = 100) -> Dict[str, Any]:
+        """List all documents in the system"""
+        
+        if not self._initialized:
+            await self.initialize()
+        
+        try:
+            # Get all documents from metadata collection
+            all_docs = self.metadata_collection.get()
+            
+            documents = []
+            if all_docs and all_docs['ids']:
+                for i, doc_id in enumerate(all_docs['ids']):
+                    metadata = all_docs['metadatas'][i]
+                    documents.append({
+                        "document_id": doc_id,
+                        "document_name": metadata.get("document_name", "Unknown"),
+                        "chunk_count": metadata.get("chunk_count", 0),
+                        "added_date": metadata.get("added_date", "Unknown"),
+                        "file_size": metadata.get("file_size", 0)  # Will be 0 for now
+                    })
+            
+            # Sort by added_date (newest first)
+            documents.sort(key=lambda x: x["added_date"], reverse=True)
+            
+            # Apply pagination
+            total = len(documents)
+            documents = documents[skip:skip + limit]
+            
+            return {
+                "documents": documents,
+                "total": total,
+                "skip": skip,
+                "limit": limit
+            }
+            
+        except Exception as e:
+            logger.error("Failed to list documents", error=str(e))
+            return {
+                "documents": [],
+                "total": 0,
+                "skip": skip,
+                "limit": limit
+            }
     
     async def get_document_summary(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get summary information for a document"""
