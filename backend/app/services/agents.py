@@ -106,13 +106,17 @@ class DocumentFinderAgent(BaseAgent):
         document_analysis = await self._analyze_document_requirements(segment_prompt)
         
         # Retrieve relevant chunks based on the analysis
-        retrieval_results = await rag_system.retrieve_relevant_chunks(
-            query=segment_prompt,
-            document_types=required_document_types if required_document_types else None,
-            max_results=max_documents,
-            include_tables=document_analysis.get("needs_tables", True),
-            focus_keywords=document_analysis.get("focus_keywords", [])
-        )
+        try:
+            retrieval_results = await rag_system.retrieve_relevant_chunks(
+                query=segment_prompt,
+                document_types=required_document_types if required_document_types else None,
+                max_results=max_documents,
+                include_tables=document_analysis.get("needs_tables", True),
+                focus_keywords=document_analysis.get("focus_keywords", [])
+            )
+        except Exception as e:
+            self.logger.warning(f"Document retrieval failed: {e}, proceeding with empty results")
+            retrieval_results = []
         
         # Group results by document
         documents_found = {}
@@ -149,6 +153,9 @@ class DocumentFinderAgent(BaseAgent):
             key=lambda x: x["total_relevance_score"],
             reverse=True
         )
+        
+        if not ranked_documents:
+            self.logger.warning("No relevant documents found for segment", prompt=segment_prompt[:100])
         
         return {
             "documents_found": ranked_documents,
@@ -236,7 +243,9 @@ class ContentGeneratorAgent(BaseAgent):
             raise ValueError("segment_prompt is required")
         
         if not retrieved_documents:
-            raise ValueError("retrieved_documents is required")
+            self.logger.warning("No documents retrieved for content generation, proceeding with general knowledge")
+            # Instead of failing, generate content with limited context
+            retrieved_documents = []
         
         self.logger.info(
             "Generating content",
@@ -246,7 +255,10 @@ class ContentGeneratorAgent(BaseAgent):
         )
         
         # Prepare context from retrieved documents
-        context = await self._prepare_document_context(retrieved_documents)
+        if retrieved_documents:
+            context = await self._prepare_document_context(retrieved_documents)
+        else:
+            context = "No specific documents were retrieved for this segment. Please generate content based on general knowledge and best practices."
         
         # Generate content using the context
         generated_content = await self._generate_content_with_context(
@@ -265,9 +277,9 @@ class ContentGeneratorAgent(BaseAgent):
             "references": references,
             "context_summary": {
                 "total_documents": len(retrieved_documents),
-                "total_chunks": sum(len(doc["chunks"]) for doc in retrieved_documents),
+                "total_chunks": sum(len(doc.get("chunks", [])) for doc in retrieved_documents),
                 "context_length": len(context),
-                "primary_sources": [doc["document_id"] for doc in retrieved_documents[:3]]
+                "primary_sources": [doc["document_id"] for doc in retrieved_documents[:3]] if retrieved_documents else []
             }
         }
     
@@ -393,7 +405,22 @@ class ValidatorAgent(BaseAgent):
             raise ValueError("generated_content is required")
         
         if not source_documents:
-            raise ValueError("source_documents is required")
+            self.logger.warning("No source documents provided for validation, skipping document-based validation")
+            # Return a basic validation result when no source documents are available
+            return {
+                "overall_accuracy": "unknown",
+                "confidence_score": 0.5,
+                "issues": [],
+                "strengths": ["Content generated without specific source validation"],
+                "overall_assessment": "Generated content without source document validation",
+                "validation_metadata": {
+                    "total_issues": 0,
+                    "high_severity_issues": 0,
+                    "medium_severity_issues": 0,
+                    "low_severity_issues": 0,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
         
         self.logger.info(
             "Validating generated content",

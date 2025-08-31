@@ -360,12 +360,15 @@ class RAGSystem:
         
         try:
             # Generate query embedding
+            logger.info("Generating query embedding", query=query[:100])
             query_embeddings = await bedrock_service.generate_embeddings([query])
             query_embedding = query_embeddings[0]
+            logger.info("Query embedding generated", dimension=len(query_embedding))
             
             results = []
             
             # Semantic search in text collection
+            logger.info("Searching text collection", max_results=max_results // 2)
             text_results = await self._semantic_search(
                 query_embedding,
                 self.text_collection,
@@ -373,10 +376,12 @@ class RAGSystem:
                 document_types=document_types,
                 retrieval_method="semantic"
             )
+            logger.info("Text search completed", results_found=len(text_results))
             results.extend(text_results)
             
             # Semantic search in table collection (if enabled)
             if include_tables:
+                logger.info("Searching table collection", max_results=max_results // 2)
                 table_results = await self._semantic_search(
                     query_embedding,
                     self.table_collection,
@@ -384,6 +389,7 @@ class RAGSystem:
                     document_types=document_types,
                     retrieval_method="semantic"
                 )
+                logger.info("Table search completed", results_found=len(table_results))
                 results.extend(table_results)
             
             # Keyword-based search for specific terms
@@ -464,7 +470,13 @@ class RAGSystem:
             return retrieval_results
             
         except Exception as e:
-            logger.warning("Semantic search failed", error=str(e))
+            logger.error("Semantic search failed", 
+                        error=str(e), 
+                        collection_name=getattr(collection, 'name', 'unknown'),
+                        where_clause=where_clause,
+                        max_results=max_results)
+            import traceback
+            logger.error("Semantic search traceback", traceback=traceback.format_exc())
             return []
     
     async def _keyword_search(
