@@ -21,6 +21,15 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await init_db()
     
+    # Initialize services
+    try:
+        from app.services import initialize_services
+        await initialize_services()
+        logger.info("Services initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize services: {e}")
+        # Continue anyway - some endpoints might still work
+    
     yield
     
     logger.info("Shutting down Credit Review Report Generation System")
