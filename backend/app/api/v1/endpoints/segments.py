@@ -51,6 +51,11 @@ class GenerateContentRequest(BaseModel):
     validation_enabled: bool = True
 
 
+class DirectGenerationRequest(BaseModel):
+    segment_data: Dict[str, Any]
+    validation_enabled: bool = True
+
+
 @router.post("/", response_model=SegmentResponse)
 async def create_segment(
     request: CreateSegmentRequest,
@@ -221,6 +226,51 @@ async def generate_segment_content(
     except Exception as e:
         logger.error("Failed to generate segment content", error=str(e), segment_id=segment_id)
         raise HTTPException(status_code=500, detail="Failed to generate segment content")
+
+
+@router.post("/generate-report")
+async def generate_report_section(
+    request: DirectGenerationRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Generate content directly for a report section"""
+    
+    try:
+        # Use the report coordinator agent to generate content
+        task_data = {
+            "segment_data": request.segment_data,
+            "validation_enabled": request.validation_enabled
+        }
+        
+        result = await report_coordinator_agent.execute(task_data)
+        
+        if not result.success:
+            return {
+                "success": False,
+                "error": result.error_message,
+                "generated_content": None
+            }
+        
+        logger.info("Report section generated", segment_name=request.segment_data.get("name"))
+        
+        return {
+            "success": True,
+            "generated_content": result.data.get("generated_content"),
+            "generation_metadata": {
+                "execution_time_ms": result.execution_time_ms,
+                "documents_found": len(result.data.get("document_retrieval", {}).get("documents_found", [])),
+                "total_chunks": result.data.get("document_retrieval", {}).get("total_chunks", 0),
+                "validation_results": result.data.get("validation")
+            }
+        }
+        
+    except Exception as e:
+        logger.error("Failed to generate report section", error=str(e))
+        return {
+            "success": False,
+            "error": str(e),
+            "generated_content": None
+        }
 
 
 @router.get("/{segment_id}/validation")
