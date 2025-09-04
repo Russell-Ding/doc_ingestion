@@ -521,29 +521,29 @@ def display_paragraph_validation_status(validation_status):
     # Enhanced status display with detailed explanations
     if status == 'passed':
         st.success(f"✅ **Validation Passed**: {conclusion}")
-        with st.expander("Why this paragraph passed validation", expanded=False):
-            st.write("**✓ Accuracy Check**: Content appears factually correct based on source documents")
-            st.write("**✓ Completeness Check**: All required information elements are present")
-            st.write("**✓ Consistency Check**: No contradictory statements detected")
-            st.write("**✓ Compliance Check**: Meets regulatory and style requirements")
+        # Show success details in a clean container instead of expander
+        st.markdown("**Validation Checks Passed:**")
+        st.write("✓ **Accuracy Check**: Content appears factually correct based on source documents")
+        st.write("✓ **Completeness Check**: All required information elements are present")
+        st.write("✓ **Consistency Check**: No contradictory statements detected")
+        st.write("✓ **Compliance Check**: Meets regulatory and style requirements")
             
     elif status == 'partially_passed':
         st.warning(f"⚠️ **Validation Partially Passed**: {conclusion}")
-        with st.expander("Issues found in this paragraph", expanded=True):
-            st.write("**⚠️ This paragraph has some validation concerns but is generally acceptable.**")
-            st.write("Review the issues below and consider revisions to improve quality.")
+        st.write("**⚠️ This paragraph has some validation concerns but is generally acceptable.**")
+        st.write("Review the issues below and consider revisions to improve quality.")
             
     elif status == 'not_passed':
         st.error(f"❌ **Validation Failed**: {conclusion}")
-        with st.expander("Critical issues requiring attention", expanded=True):
-            st.write("**🚨 This paragraph has significant validation failures.**")
-            st.write("**Immediate action required** - review and revise before using in final report.")
+        st.write("**🚨 This paragraph has significant validation failures.**")
+        st.write("**Immediate action required** - review and revise before using in final report.")
             
     else:
         st.info(f"ℹ️ **Validation Status**: {conclusion}")
     
     # Show detailed issues for this paragraph with enhanced explanations
     if issues:
+        st.markdown("**📋 Validation Issues Found:**")
         for i, issue in enumerate(issues, 1):
             severity = issue.get('severity', 'medium')
             issue_type = issue.get('issue_type', 'Issue')
@@ -566,81 +566,60 @@ def display_paragraph_validation_status(validation_status):
                 'info': '**INFORMATIONAL**'
             }.get(severity, '**UNKNOWN**')
             
-            with st.expander(f"{severity_icon} Issue #{i}: {issue_type.title()} - {severity_label}", expanded=(severity == 'high')):
-                # Issue overview
-                st.markdown(f"**Problem Type**: {issue_type.title()}")
-                st.markdown(f"**Severity Level**: {severity_label}")
-                st.markdown(f"**AI Confidence**: {confidence:.1%}")
-                
-                # Detailed description
-                st.markdown("**📋 Issue Description:**")
-                st.write(f"_{description}_")
-                
-                # Problematic text (if available)
+            # Create a bordered container for each issue instead of expander
+            st.markdown(f"**{severity_icon} Issue #{i}: {issue_type.title()} - {severity_label}**")
+            
+            # Issue details in a clean format
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.write(f"**Type:** {issue_type.title()}")
+                st.write(f"**Severity:** {severity_label}")
+            with col2:
+                st.write(f"**Confidence:** {confidence:.1%}")
                 if text_span:
-                    st.markdown("**📝 Problematic Text:**")
-                    st.code(f'"{text_span}"', language=None)
+                    st.write(f"**Affected Text:** _{text_span[:50]}..._" if len(text_span) > 50 else f"**Affected Text:** _{text_span}_")
+            
+            # Issue description
+            st.write(f"**Description:** {description}")
+            
+            # Detailed explanation based on issue type
+            if issue_type == 'accuracy':
+                st.write("📍 **Root Cause:** Information may not be supported by source documents")
+                st.write("⚠️ **Impact:** Could mislead readers or damage report credibility")
                 
-                # Detailed explanation based on issue type
-                st.markdown("**🔍 Detailed Explanation:**")
-                if issue_type == 'accuracy':
-                    st.write("• **Accuracy Issue**: The AI detected potential factual inaccuracies in this text")
-                    st.write("• **Root Cause**: Information may not be supported by source documents or contains inconsistencies")
-                    st.write("• **Impact**: Could mislead readers or damage report credibility")
-                    
-                elif issue_type == 'completeness':
-                    st.write("• **Completeness Issue**: This paragraph appears to be missing important information")
-                    st.write("• **Root Cause**: Required elements from the original prompt may not be fully addressed")
-                    st.write("• **Impact**: May leave readers with incomplete understanding of the topic")
-                    
-                elif issue_type == 'consistency':
-                    st.write("• **Consistency Issue**: This content conflicts with information elsewhere in the report")
-                    st.write("• **Root Cause**: Contradictory statements or inconsistent data presentation")
-                    st.write("• **Impact**: Creates confusion and reduces report reliability")
-                    
-                elif issue_type == 'compliance':
-                    st.write("• **Compliance Issue**: Content may not meet regulatory or style requirements")
-                    st.write("• **Root Cause**: Missing disclosures, inappropriate language, or formatting issues")
-                    st.write("• **Impact**: Could result in regulatory issues or professional standards violations")
-                    
-                elif issue_type == 'factual_error':
-                    st.write("• **Factual Error**: Specific facts in this text appear to be incorrect")
-                    st.write("• **Root Cause**: Misinterpretation of source documents or outdated information")
-                    st.write("• **Impact**: Direct misinformation that could affect decision-making")
-                    
-                elif issue_type == 'source_mismatch':
-                    st.write("• **Source Mismatch**: Claims in this text don't align with available source documents")
-                    st.write("• **Root Cause**: Information may be inferred rather than directly supported by sources")
-                    st.write("• **Impact**: Undermines the evidence-based nature of the analysis")
-                    
+            elif issue_type == 'completeness':
+                st.write("📍 **Root Cause:** Required elements may not be fully addressed")
+                st.write("⚠️ **Impact:** May leave readers with incomplete understanding")
+                
+            elif issue_type == 'consistency':
+                st.write("📍 **Root Cause:** Contradictory statements or inconsistent data")
+                st.write("⚠️ **Impact:** Creates confusion and reduces report reliability")
+                
+            elif issue_type == 'compliance':
+                st.write("📍 **Root Cause:** Missing disclosures or inappropriate language")
+                st.write("⚠️ **Impact:** Could result in regulatory issues")
+                
+            elif issue_type == 'factual_error':
+                st.write("📍 **Root Cause:** Misinterpretation of source documents")
+                st.write("⚠️ **Impact:** Direct misinformation affecting decision-making")
+                
+            elif issue_type == 'source_mismatch':
+                st.write("📍 **Root Cause:** Claims not aligned with source documents")
+                st.write("⚠️ **Impact:** Undermines evidence-based analysis")
+            
+            # Suggested fix with actionable steps
+            if suggested_fix:
+                st.write(f"💡 **Recommended Action:** {suggested_fix}")
+                
+                # Additional actionable steps based on severity
+                if severity == 'high':
+                    st.write("🚨 **Immediate Steps:** STOP → VERIFY → REVISE → VALIDATE")
+                elif severity == 'medium':
+                    st.write("⚠️ **Recommended:** REVIEW → CONSIDER → IMPROVE")
                 else:
-                    st.write(f"• **{issue_type.title()} Issue**: {description}")
-                
-                # Suggested fix with actionable steps
-                if suggested_fix:
-                    st.markdown("**💡 Recommended Action:**")
-                    st.write(f"_{suggested_fix}_")
-                    
-                    # Additional actionable steps based on severity
-                    if severity == 'high':
-                        st.markdown("**🚨 Immediate Steps Required:**")
-                        st.write("1. **STOP** - Do not use this content in final report without revision")
-                        st.write("2. **VERIFY** - Check against original source documents")
-                        st.write("3. **REVISE** - Rewrite the problematic section")
-                        st.write("4. **VALIDATE** - Re-run validation after changes")
-                        
-                    elif severity == 'medium':
-                        st.markdown("**⚠️ Recommended Steps:**")
-                        st.write("1. **REVIEW** - Examine the flagged content carefully")
-                        st.write("2. **CONSIDER** - Evaluate if revision would improve quality")
-                        st.write("3. **OPTIONAL** - Make improvements if time permits")
-                        
-                    else:
-                        st.markdown("**ℹ️ Optional Steps:**")
-                        st.write("1. **NOTE** - Be aware of this minor issue")
-                        st.write("2. **CONSIDER** - Minor refinements could enhance quality")
-                
-                st.markdown("---")
+                    st.write("ℹ️ **Optional:** NOTE → CONSIDER minor refinements")
+            
+            st.markdown("---")
 
 def show_generated_report(report):
     """Display the generated report with validation analysis"""
