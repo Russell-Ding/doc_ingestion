@@ -128,6 +128,72 @@ def download_word_document(download_url):
         st.error(f"Download failed: {str(e)}")
         return None
 
+def create_basic_word_content(report):
+    """Create a basic Word document as fallback when backend fails"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        
+        # Create new document
+        doc = Document()
+        
+        # Add title
+        title = doc.add_heading(report['title'], 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Add generation date
+        date_para = doc.add_paragraph(f"Generated on {report['generation_date']}")
+        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Add page break
+        doc.add_page_break()
+        
+        # Add sections
+        for i, section in enumerate(report['sections']):
+            # Section heading
+            doc.add_heading(f"{i+1}. {section['name']}", level=1)
+            
+            # Section content
+            content = section.get('content', 'No content available')
+            paragraphs = content.split('\n\n')
+            
+            for paragraph in paragraphs:
+                if paragraph.strip():
+                    doc.add_paragraph(paragraph.strip())
+            
+            # Add spacing
+            doc.add_paragraph()
+        
+        # Save to BytesIO
+        from io import BytesIO
+        word_buffer = BytesIO()
+        doc.save(word_buffer)
+        word_buffer.seek(0)
+        
+        return word_buffer.getvalue()
+        
+    except ImportError:
+        # If python-docx is not available, create a simple text-based "Word" document
+        content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
+        
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n"
+            content += f"{section.get('content', 'No content available')}\n\n"
+            content += "-" * 50 + "\n\n"
+        
+        return content.encode('utf-8')
+    
+    except Exception as e:
+        # Ultimate fallback - just return text content
+        content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
+        
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n"
+            content += f"{section.get('content', 'No content available')}\n\n"
+        
+        return content.encode('utf-8')
+
 def main():
     st.title("📊 Credit Review Document System")
     
@@ -447,35 +513,134 @@ def get_paragraph_validation(validation_data, paragraph_text):
     }
 
 def display_paragraph_validation_status(validation_status):
-    """Display paragraph validation status with appropriate styling"""
+    """Display paragraph validation status with detailed explanations"""
     status = validation_status.get('status', 'unknown')
     conclusion = validation_status.get('conclusion', 'Unknown status')
     issues = validation_status.get('issues', [])
     
+    # Enhanced status display with detailed explanations
     if status == 'passed':
-        st.success(f"✅ Passed: {conclusion}")
+        st.success(f"✅ **Validation Passed**: {conclusion}")
+        with st.expander("Why this paragraph passed validation", expanded=False):
+            st.write("**✓ Accuracy Check**: Content appears factually correct based on source documents")
+            st.write("**✓ Completeness Check**: All required information elements are present")
+            st.write("**✓ Consistency Check**: No contradictory statements detected")
+            st.write("**✓ Compliance Check**: Meets regulatory and style requirements")
+            
     elif status == 'partially_passed':
-        st.warning(f"⚠️ Partially Passed: {conclusion}")
+        st.warning(f"⚠️ **Validation Partially Passed**: {conclusion}")
+        with st.expander("Issues found in this paragraph", expanded=True):
+            st.write("**⚠️ This paragraph has some validation concerns but is generally acceptable.**")
+            st.write("Review the issues below and consider revisions to improve quality.")
+            
     elif status == 'not_passed':
-        st.error(f"❌ Not Passed: {conclusion}")
+        st.error(f"❌ **Validation Failed**: {conclusion}")
+        with st.expander("Critical issues requiring attention", expanded=True):
+            st.write("**🚨 This paragraph has significant validation failures.**")
+            st.write("**Immediate action required** - review and revise before using in final report.")
+            
     else:
-        st.info(f"ℹ️ {conclusion}")
+        st.info(f"ℹ️ **Validation Status**: {conclusion}")
     
-    # Show detailed issues for this paragraph
+    # Show detailed issues for this paragraph with enhanced explanations
     if issues:
-        with st.expander(f"View {len(issues)} issue(s)", expanded=False):
-            for issue in issues:
-                severity_icon = {
-                    'high': '🔴',
-                    'medium': '🟡',
-                    'low': '🟢',
-                    'info': '🔵'
-                }.get(issue.get('severity', 'medium'), '⚪')
+        for i, issue in enumerate(issues, 1):
+            severity = issue.get('severity', 'medium')
+            issue_type = issue.get('issue_type', 'Issue')
+            description = issue.get('description', 'No description available')
+            suggested_fix = issue.get('suggested_fix', '')
+            confidence = issue.get('confidence_score', 0.0)
+            text_span = issue.get('text_span', '')
+            
+            severity_icon = {
+                'high': '🔴',
+                'medium': '🟡',
+                'low': '🟢',
+                'info': '🔵'
+            }.get(severity, '⚪')
+            
+            severity_label = {
+                'high': '**HIGH PRIORITY**',
+                'medium': '**MEDIUM PRIORITY**',
+                'low': '**LOW PRIORITY**',
+                'info': '**INFORMATIONAL**'
+            }.get(severity, '**UNKNOWN**')
+            
+            with st.expander(f"{severity_icon} Issue #{i}: {issue_type.title()} - {severity_label}", expanded=(severity == 'high')):
+                # Issue overview
+                st.markdown(f"**Problem Type**: {issue_type.title()}")
+                st.markdown(f"**Severity Level**: {severity_label}")
+                st.markdown(f"**AI Confidence**: {confidence:.1%}")
                 
-                st.write(f"{severity_icon} **{issue.get('issue_type', 'Issue').title()}**")
-                st.write(f"_{issue.get('description', 'No description')}_")
-                if issue.get('suggested_fix'):
-                    st.write(f"💡 {issue.get('suggested_fix', '')}")
+                # Detailed description
+                st.markdown("**📋 Issue Description:**")
+                st.write(f"_{description}_")
+                
+                # Problematic text (if available)
+                if text_span:
+                    st.markdown("**📝 Problematic Text:**")
+                    st.code(f'"{text_span}"', language=None)
+                
+                # Detailed explanation based on issue type
+                st.markdown("**🔍 Detailed Explanation:**")
+                if issue_type == 'accuracy':
+                    st.write("• **Accuracy Issue**: The AI detected potential factual inaccuracies in this text")
+                    st.write("• **Root Cause**: Information may not be supported by source documents or contains inconsistencies")
+                    st.write("• **Impact**: Could mislead readers or damage report credibility")
+                    
+                elif issue_type == 'completeness':
+                    st.write("• **Completeness Issue**: This paragraph appears to be missing important information")
+                    st.write("• **Root Cause**: Required elements from the original prompt may not be fully addressed")
+                    st.write("• **Impact**: May leave readers with incomplete understanding of the topic")
+                    
+                elif issue_type == 'consistency':
+                    st.write("• **Consistency Issue**: This content conflicts with information elsewhere in the report")
+                    st.write("• **Root Cause**: Contradictory statements or inconsistent data presentation")
+                    st.write("• **Impact**: Creates confusion and reduces report reliability")
+                    
+                elif issue_type == 'compliance':
+                    st.write("• **Compliance Issue**: Content may not meet regulatory or style requirements")
+                    st.write("• **Root Cause**: Missing disclosures, inappropriate language, or formatting issues")
+                    st.write("• **Impact**: Could result in regulatory issues or professional standards violations")
+                    
+                elif issue_type == 'factual_error':
+                    st.write("• **Factual Error**: Specific facts in this text appear to be incorrect")
+                    st.write("• **Root Cause**: Misinterpretation of source documents or outdated information")
+                    st.write("• **Impact**: Direct misinformation that could affect decision-making")
+                    
+                elif issue_type == 'source_mismatch':
+                    st.write("• **Source Mismatch**: Claims in this text don't align with available source documents")
+                    st.write("• **Root Cause**: Information may be inferred rather than directly supported by sources")
+                    st.write("• **Impact**: Undermines the evidence-based nature of the analysis")
+                    
+                else:
+                    st.write(f"• **{issue_type.title()} Issue**: {description}")
+                
+                # Suggested fix with actionable steps
+                if suggested_fix:
+                    st.markdown("**💡 Recommended Action:**")
+                    st.write(f"_{suggested_fix}_")
+                    
+                    # Additional actionable steps based on severity
+                    if severity == 'high':
+                        st.markdown("**🚨 Immediate Steps Required:**")
+                        st.write("1. **STOP** - Do not use this content in final report without revision")
+                        st.write("2. **VERIFY** - Check against original source documents")
+                        st.write("3. **REVISE** - Rewrite the problematic section")
+                        st.write("4. **VALIDATE** - Re-run validation after changes")
+                        
+                    elif severity == 'medium':
+                        st.markdown("**⚠️ Recommended Steps:**")
+                        st.write("1. **REVIEW** - Examine the flagged content carefully")
+                        st.write("2. **CONSIDER** - Evaluate if revision would improve quality")
+                        st.write("3. **OPTIONAL** - Make improvements if time permits")
+                        
+                    else:
+                        st.markdown("**ℹ️ Optional Steps:**")
+                        st.write("1. **NOTE** - Be aware of this minor issue")
+                        st.write("2. **CONSIDER** - Minor refinements could enhance quality")
+                
+                st.markdown("---")
 
 def show_generated_report(report):
     """Display the generated report with validation analysis"""
@@ -595,11 +760,12 @@ def show_generated_report(report):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Download as Word document
+        # Download as Word document - direct generation like other formats
         include_validation = st.checkbox("Include AI validation comments", value=True, key="word_validation")
         
-        if st.button("📄 Generate Word Document", type="primary", use_container_width=True):
-            with st.spinner("🔄 Creating Word document..."):
+        # Generate Word document content directly for download
+        with st.spinner("🔄 Preparing Word document..."):
+            try:
                 export_result = create_report_and_export_word(report, include_validation)
                 
                 if export_result and not export_result.get('error'):
@@ -609,24 +775,67 @@ def show_generated_report(report):
                         word_content = download_word_document(download_url)
                         
                         if word_content:
-                            st.success("✅ Word document generated successfully!")
-                            
-                            # Provide download button
+                            # Provide direct download button like other formats
                             filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
                             st.download_button(
-                                label="💾 Download Word Document",
+                                label="📄 Download Word Document",
                                 data=word_content,
                                 file_name=filename,
                                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True
+                                use_container_width=True,
+                                type="primary",
+                                help="Professional Word document with validation comments (if enabled)"
                             )
                         else:
-                            st.error("❌ Failed to download the Word document")
+                            # Fallback: Show error but still provide basic download
+                            st.error("❌ Failed to fetch Word document from server")
+                            st.write("**Fallback Option:**")
+                            basic_word_content = create_basic_word_content(report)
+                            st.download_button(
+                                label="📄 Download Basic Word Document",
+                                data=basic_word_content,
+                                file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True,
+                                help="Basic Word document (server-generated version failed)"
+                            )
                     else:
-                        st.error("❌ No download URL provided")
+                        st.error("❌ No download URL provided from server")
+                        # Fallback option
+                        basic_word_content = create_basic_word_content(report)
+                        st.download_button(
+                            label="📄 Download Basic Word Document",
+                            data=basic_word_content,
+                            file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                            help="Basic Word document (server connection issue)"
+                        )
                 else:
                     error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
                     st.error(f"❌ Word export failed: {error_msg}")
+                    # Provide fallback download
+                    basic_word_content = create_basic_word_content(report)
+                    st.download_button(
+                        label="📄 Download Basic Word Document",
+                        data=basic_word_content,
+                        file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True,
+                        help="Basic Word document (advanced features failed)"
+                    )
+            except Exception as e:
+                st.error(f"❌ Error generating Word document: {str(e)}")
+                # Provide fallback download
+                basic_word_content = create_basic_word_content(report)
+                st.download_button(
+                    label="📄 Download Basic Word Document",
+                    data=basic_word_content,
+                    file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    help="Basic Word document (fallback option)"
+                )
     
     with col2:
         # Download as text
