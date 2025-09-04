@@ -9,6 +9,10 @@ from datetime import datetime
 from app.core.database import get_db
 from app.services.agents import report_coordinator_agent
 
+# In-memory storage for segments (since we're not using a real database)
+_segments_storage = {}
+_segments_by_report = {}
+
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 
@@ -21,6 +25,9 @@ class CreateSegmentRequest(BaseModel):
     order_index: int
     required_document_types: Optional[List[str]] = []
     generation_settings: Optional[Dict[str, Any]] = {}
+    generated_content: Optional[str] = None
+    content_status: Optional[str] = "pending"
+    validation_results: Optional[Dict[str, Any]] = {}
 
 
 class UpdateSegmentRequest(BaseModel):
@@ -43,6 +50,7 @@ class SegmentResponse(BaseModel):
     generated_content: Optional[str]
     required_document_types: List[str]
     generation_settings: Dict[str, Any]
+    validation_results: Optional[Dict[str, Any]]
     created_date: str
     updated_date: str
 
@@ -67,7 +75,7 @@ async def create_segment(
     try:
         segment_id = str(uuid.uuid4())
         
-        # In a real implementation, save to database
+        # Store in in-memory storage with actual content
         segment_data = {
             "id": segment_id,
             "report_id": request.report_id,
@@ -75,13 +83,22 @@ async def create_segment(
             "description": request.description,
             "prompt": request.prompt,
             "order_index": request.order_index,
-            "content_status": "pending",
-            "generated_content": None,
+            "content_status": request.content_status or "pending",
+            "generated_content": request.generated_content,
             "required_document_types": request.required_document_types or [],
             "generation_settings": request.generation_settings or {},
+            "validation_results": request.validation_results or {},
             "created_date": datetime.now().isoformat(),
             "updated_date": datetime.now().isoformat()
         }
+        
+        # Store in memory
+        _segments_storage[segment_id] = segment_data
+        
+        # Also store by report_id for easy lookup
+        if request.report_id not in _segments_by_report:
+            _segments_by_report[request.report_id] = []
+        _segments_by_report[request.report_id].append(segment_id)
         
         logger.info("Segment created", segment_id=segment_id, name=request.name)
         
@@ -100,9 +117,18 @@ async def list_segments_for_report(
     """List all segments for a specific report"""
     
     try:
-        # In a real implementation, query database
-        # For now, return empty list
-        return []
+        # Get segments for this report from in-memory storage
+        segment_ids = _segments_by_report.get(report_id, [])
+        segments = []
+        
+        for segment_id in segment_ids:
+            if segment_id in _segments_storage:
+                segments.append(SegmentResponse(**_segments_storage[segment_id]))
+        
+        # Sort by order_index
+        segments.sort(key=lambda x: x.order_index)
+        
+        return segments
         
     except Exception as e:
         logger.error("Failed to list segments", error=str(e), report_id=report_id)

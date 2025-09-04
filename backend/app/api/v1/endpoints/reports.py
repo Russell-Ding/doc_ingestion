@@ -12,6 +12,10 @@ from app.core.database import get_db
 from app.services.agents import report_coordinator_agent
 from app.services.word_export import word_export_service
 
+# In-memory storage for reports and segments (since we're not using a real database)
+_reports_storage = {}
+_segments_storage = {}
+
 router = APIRouter()
 logger = structlog.get_logger(__name__)
 
@@ -46,7 +50,7 @@ async def create_report(
     try:
         report_id = str(uuid.uuid4())
         
-        # In a real implementation, save to database
+        # Store in in-memory storage
         report_data = {
             "id": report_id,
             "title": request.title,
@@ -55,6 +59,8 @@ async def create_report(
             "created_date": datetime.now().isoformat(),
             "segments_count": 0
         }
+        
+        _reports_storage[report_id] = report_data
         
         logger.info("Report created", report_id=report_id, title=request.title)
         
@@ -176,15 +182,32 @@ async def export_report(
         raise HTTPException(status_code=400, detail="Unsupported export format")
     
     try:
-        # In a real implementation, get report data from database
-        report_data = {
-            "id": report_id,
-            "title": "Sample Report",
-            "description": "Generated report"
-        }
+        # Get report data from in-memory storage
+        if report_id not in _reports_storage:
+            raise HTTPException(status_code=404, detail="Report not found")
         
-        segments = []  # Would get from database
-        validation_results = []  # Would get from database
+        report_data = _reports_storage[report_id]
+        
+        # Import the segments storage from segments.py
+        from app.api.v1.endpoints.segments import _segments_by_report, _segments_storage
+        
+        # Get segments for this report from in-memory storage
+        segment_ids = _segments_by_report.get(report_id, [])
+        segments = []
+        validation_results = []
+        
+        for segment_id in segment_ids:
+            if segment_id in _segments_storage:
+                segment_data = _segments_storage[segment_id]
+                segments.append(segment_data)
+                validation_results.append(segment_data.get('validation_results', {}))
+        
+        # Sort segments by order_index
+        segments.sort(key=lambda x: x.get('order_index', 0))
+        
+        logger.info(f"Exporting report with {len(segments)} segments", 
+                   report_id=report_id, 
+                   report_title=report_data.get('title'))
         
         if format == "word":
             export_result = await word_export_service.generate_report(

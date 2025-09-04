@@ -446,21 +446,55 @@ class BedrockService:
                 temperature=0.1  # Lower temperature for more consistent validation
             )
             
+            # Log the raw response for debugging
+            raw_content = result.get('content', '')
+            logger.info("Raw validation response", content_preview=raw_content[:200])
+            
+            if not raw_content:
+                logger.warning("Empty validation response received")
+                return {
+                    "overall_accuracy": "unknown",
+                    "confidence_score": 0.0,
+                    "issues": [],
+                    "strengths": [],
+                    "overall_assessment": "Validation failed - empty response from AI model",
+                    "error": "Empty response"
+                }
+            
+            # Try to extract JSON from the response (in case it has extra text)
+            json_start = raw_content.find('{')
+            json_end = raw_content.rfind('}') + 1
+            
+            if json_start == -1 or json_end == 0:
+                logger.warning("No JSON found in validation response", response=raw_content[:500])
+                return {
+                    "overall_accuracy": "medium",
+                    "confidence_score": 0.5,
+                    "issues": [],
+                    "strengths": ["Content reviewed"],
+                    "overall_assessment": "Validation completed but response format was unexpected",
+                    "error": "No valid JSON found in response"
+                }
+            
+            json_content = raw_content[json_start:json_end]
+            
             # Parse the JSON response
-            validation_result = json.loads(result['content'])
+            validation_result = json.loads(json_content)
             validation_result['usage'] = result['usage']
             validation_result['timestamp'] = result['timestamp']
             
             return validation_result
             
         except json.JSONDecodeError as e:
-            logger.error("Failed to parse validation response", error=str(e))
+            logger.error("Failed to parse validation response", 
+                        error=str(e), 
+                        raw_response=result.get('content', '')[:500] if 'result' in locals() else 'No result')
             return {
                 "overall_accuracy": "unknown",
                 "confidence_score": 0.0,
                 "issues": [],
                 "strengths": [],
-                "overall_assessment": "Validation failed - unable to parse response",
+                "overall_assessment": "Validation failed - unable to parse JSON response",
                 "error": str(e)
             }
         except Exception as e:
