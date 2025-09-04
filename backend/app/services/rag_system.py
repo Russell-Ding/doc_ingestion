@@ -351,7 +351,7 @@ class RAGSystem:
         focus_keywords: Optional[List[str]] = None,
         document_ids: Optional[List[str]] = None
     ) -> List[RetrievalResult]:
-        """Retrieve relevant chunks using hybrid search"""
+        """Retrieve relevant chunks using hybrid search with LLM keyword extraction"""
         
         if not self._initialized:
             await self.initialize()
@@ -360,6 +360,11 @@ class RAGSystem:
         similarity_threshold = similarity_threshold or settings.SIMILARITY_THRESHOLD
         
         try:
+            # Step 1: Extract keywords using LLM
+            logger.info("Extracting keywords from query using LLM", query=query[:100])
+            extracted_keywords = await self._extract_keywords_with_llm(query)
+            logger.info("Keywords extracted", keywords=extracted_keywords)
+            
             # Generate query embedding
             logger.info("Generating query embedding", query=query[:100])
             query_embeddings = await bedrock_service.generate_embeddings([query])
@@ -368,39 +373,63 @@ class RAGSystem:
             
             results = []
             
-            # Semantic search in text collection
-            logger.info("Searching text collection", max_results=max_results // 2, document_ids=document_ids)
+            # Step 2: Multiple keyword-based queries (max 10 chunks each)
+            for keyword in extracted_keywords[:5]:  # Limit to top 5 keywords
+                logger.info("Searching with keyword", keyword=keyword)
+                
+                # Search text collection
+                text_results = await self._semantic_search_with_keyword(
+                    query_embedding,
+                    keyword,
+                    self.text_collection,
+                    max_results=10,  # Max 10 chunks per query
+                    document_types=document_types,
+                    retrieval_method="semantic_keyword",
+                    document_ids=document_ids
+                )
+                results.extend(text_results)
+                
+                # Search table collection if enabled
+                if include_tables:
+                    table_results = await self._semantic_search_with_keyword(
+                        query_embedding,
+                        keyword,
+                        self.table_collection,
+                        max_results=10,  # Max 10 chunks per query
+                        document_types=document_types,
+                        retrieval_method="semantic_keyword",
+                        document_ids=document_ids
+                    )
+                    results.extend(table_results)
+            
+            # Step 3: Original query semantic search (for fallback)
             text_results = await self._semantic_search(
                 query_embedding,
                 self.text_collection,
-                max_results=max_results // 2,
+                max_results=10,
                 document_types=document_types,
                 retrieval_method="semantic",
                 document_ids=document_ids
             )
-            logger.info("Text search completed", results_found=len(text_results))
             results.extend(text_results)
             
-            # Semantic search in table collection (if enabled)
             if include_tables:
-                logger.info("Searching table collection", max_results=max_results // 2, document_ids=document_ids)
                 table_results = await self._semantic_search(
                     query_embedding,
                     self.table_collection,
-                    max_results=max_results // 2,
+                    max_results=10,
                     document_types=document_types,
                     retrieval_method="semantic",
                     document_ids=document_ids
                 )
-                logger.info("Table search completed", results_found=len(table_results))
                 results.extend(table_results)
             
-            # Keyword-based search for specific terms
+            # Legacy keyword search (if focus_keywords provided)
             if focus_keywords:
                 keyword_results = await self._keyword_search(
                     focus_keywords,
                     document_types=document_types,
-                    max_results=max_results // 4,
+                    max_results=10,
                     document_ids=document_ids
                 )
                 results.extend(keyword_results)
@@ -410,7 +439,7 @@ class RAGSystem:
                 numerical_results = await self._numerical_table_search(
                     query,
                     document_types=document_types,
-                    max_results=max_results // 4,
+                    max_results=10,
                     document_ids=document_ids
                 )
                 results.extend(numerical_results)
@@ -425,6 +454,7 @@ class RAGSystem:
             logger.info(
                 "Retrieved relevant chunks",
                 query_length=len(query),
+                extracted_keywords_count=len(extracted_keywords),
                 total_results=len(final_results),
                 text_results=len([r for r in final_results if r.chunk_type in ['text', 'ocr_text']]),
                 table_results=len([r for r in final_results if 'table' in r.chunk_type])
@@ -435,6 +465,109 @@ class RAGSystem:
         except Exception as e:
             logger.error("Chunk retrieval failed", error=str(e))
             raise
+    
+    async def _extract_keywords_with_llm(self, query: str) -> List[str]:
+        """Extract up to 5 key keywords/phrases from user query using LLM"""
+        
+        extraction_prompt = f"""
+        Extract up to 5 key words or phrases from the following user query that would be most useful for searching a document database. 
+        Focus on specific terms, concepts, financial metrics, company names, or industry-specific terminology.
+        
+        User Query: {query}
+        
+        Return only a JSON array of strings, nothing else:
+        ["keyword1", "phrase2", "concept3", "metric4", "term5"]
+        """
+        
+        try:
+            result = await bedrock_service.generate_text(
+                prompt=extraction_prompt,
+                temperature=0.1,
+                max_tokens=200
+            )
+            
+            # Parse JSON response
+            import json
+            keywords = json.loads(result['content'].strip())
+            
+            # Ensure we have a list and limit to 5 items
+            if isinstance(keywords, list):
+                return keywords[:5]
+            else:
+                logger.warning("Unexpected keyword extraction format", result=result['content'])
+                return [query]  # Fallback to original query
+                
+        except Exception as e:
+            logger.warning("LLM keyword extraction failed", error=str(e))
+            # Fallback to simple keyword extraction
+            words = query.lower().split()
+            # Filter out common stop words and keep important terms
+            stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'will', 'would', 'could', 'should'}
+            keywords = [word for word in words if word not in stop_words and len(word) > 2]
+            return keywords[:5]
+    
+    async def _semantic_search_with_keyword(
+        self,
+        query_embedding: List[float],
+        keyword: str,
+        collection,
+        max_results: int,
+        document_types: Optional[List[str]] = None,
+        retrieval_method: str = "semantic_keyword",
+        document_ids: Optional[List[str]] = None
+    ) -> List[RetrievalResult]:
+        """Perform semantic search enhanced with keyword filtering"""
+        
+        where_clause = {}
+        
+        # Add keyword filter - search in document content
+        where_document_clause = {"$contains": keyword.lower()}
+        
+        # Add document type filter
+        if document_types:
+            where_clause["chunk_type"] = {"$in": document_types}
+        
+        # Add document ID filter
+        if document_ids:
+            where_clause["document_id"] = {"$in": document_ids}
+        
+        try:
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=max_results,
+                where=where_clause if where_clause else None,
+                where_document=where_document_clause
+            )
+            
+            retrieval_results = []
+            if results and results['ids'] and results['ids'][0]:
+                for i, chunk_id in enumerate(results['ids'][0]):
+                    result = RetrievalResult(
+                        chunk_id=chunk_id,
+                        document_id=results['metadatas'][0][i]['document_id'],
+                        content=results['documents'][0][i],
+                        chunk_type=results['metadatas'][0][i]['chunk_type'],
+                        page_number=results['metadatas'][0][i].get('page_number'),
+                        section_title=results['metadatas'][0][i].get('section_title'),
+                        table_data=None,  # Will be loaded separately if needed
+                        relevance_score=1.0 - results['distances'][0][i],  # Convert distance to similarity
+                        retrieval_method=retrieval_method
+                    )
+                    retrieval_results.append(result)
+            
+            return retrieval_results
+            
+        except Exception as e:
+            logger.error("Semantic search with keyword failed", 
+                        error=str(e), 
+                        keyword=keyword,
+                        collection_name=getattr(collection, 'name', 'unknown'),
+                        max_results=max_results)
+            # Fallback to regular semantic search
+            return await self._semantic_search(
+                query_embedding, collection, max_results, 
+                document_types, "semantic", document_ids
+            )
     
     async def _semantic_search(
         self,

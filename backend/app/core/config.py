@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     VECTOR_DB_TYPE: str = "chroma"  # ChromaDB only (no pgvector dependency)
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"
     MAX_RETRIEVED_CHUNKS: int = 10
-    SIMILARITY_THRESHOLD: float = 0.7
+    SIMILARITY_THRESHOLD: float = 0.5
     
     # ChromaDB Settings
     CHROMA_HOST: str = "localhost" 

@@ -231,8 +231,25 @@ class WordReportGenerator:
             paragraph.add_run(content)
             return
         
+        # Find comments that apply to this paragraph content
+        relevant_comments = []
+        for comment in word_comments:
+            text_span = comment.get('text', '')
+            if text_span and text_span.strip() in content:
+                # Find the position of this text span in the current paragraph
+                start_pos = content.find(text_span)
+                if start_pos != -1:
+                    relevant_comment = comment.copy()
+                    relevant_comment['start'] = start_pos
+                    relevant_comment['end'] = start_pos + len(text_span)
+                    relevant_comments.append(relevant_comment)
+        
+        if not relevant_comments:
+            paragraph.add_run(content)
+            return
+        
         # Sort comments by position
-        sorted_comments = sorted(word_comments, key=lambda x: x.get('start', 0))
+        sorted_comments = sorted(relevant_comments, key=lambda x: x.get('start', 0))
         
         current_pos = 0
         
@@ -259,21 +276,41 @@ class WordReportGenerator:
                     comment_run.font.highlight_color = WD_COLOR_INDEX.RED
                 elif severity == 'medium':
                     comment_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
-                else:
+                elif severity == 'low':
                     comment_run.font.highlight_color = WD_COLOR_INDEX.BRIGHT_GREEN
+                else:
+                    comment_run.font.highlight_color = WD_COLOR_INDEX.BLUE
                 
-                # Add comment as footnote or endnote (simplified approach)
+                # Add comment as footnote annotation
                 comment_text = comment.get('text', '')
-                footnote_run = paragraph.add_run(f" [Comment: {comment_text}]")
+                comment_type = comment.get('type', 'validation')
+                
+                footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
                 footnote_run.font.size = Pt(8)
                 footnote_run.font.italic = True
-                footnote_run.font.color.rgb = RGBColor(128, 128, 128)
+                
+                # Color code the comment based on severity
+                if severity == 'high':
+                    footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
+                elif severity == 'medium':
+                    footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
+                else:
+                    footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
             
             current_pos = end_pos
         
         # Add remaining text
         if current_pos < len(content):
             paragraph.add_run(content[current_pos:])
+        
+        # Add paragraph-level validation summary if there are comments
+        if relevant_comments:
+            validation_summary_run = paragraph.add_run(
+                f"\n[Paragraph Validation: {len(relevant_comments)} issue(s) identified]"
+            )
+            validation_summary_run.font.size = Pt(9)
+            validation_summary_run.font.italic = True
+            validation_summary_run.font.color.rgb = RGBColor(102, 102, 102)
     
     def _add_validation_summary_box(
         self,

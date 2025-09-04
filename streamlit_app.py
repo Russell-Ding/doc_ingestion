@@ -105,6 +105,79 @@ def export_report(report_id, format_type="word", include_validations=True):
         st.error(f"Failed to export report: {str(e)}")
         return None
 
+def get_paragraph_validation(validation_data: Dict[str, Any], paragraph_index: int, paragraph_text: str) -> Dict[str, Any]:
+    """Get validation status for a specific paragraph"""
+    if not validation_data or not validation_data.get('validation_issues'):
+        return {
+            'status': 'passed',
+            'issues': [],
+            'conclusion': 'No issues detected'
+        }
+    
+    validation_issues = validation_data.get('validation_issues', [])
+    paragraph_issues = []
+    
+    # Find issues that relate to this paragraph
+    for issue in validation_issues:
+        text_span = issue.get('text_span', '')
+        if text_span and text_span.strip() in paragraph_text:
+            paragraph_issues.append(issue)
+    
+    # Determine overall status
+    if not paragraph_issues:
+        status = 'passed'
+        conclusion = 'All validations passed'
+    else:
+        high_severity_issues = [i for i in paragraph_issues if i.get('severity') == 'high']
+        medium_severity_issues = [i for i in paragraph_issues if i.get('severity') == 'medium']
+        
+        if high_severity_issues:
+            status = 'not_passed'
+            conclusion = f"{len(high_severity_issues)} high-severity issues found"
+        elif medium_severity_issues:
+            status = 'partially_passed'
+            conclusion = f"{len(medium_severity_issues)} medium-severity issues found"
+        else:
+            status = 'partially_passed'
+            conclusion = f"{len(paragraph_issues)} minor issues found"
+    
+    return {
+        'status': status,
+        'issues': paragraph_issues,
+        'conclusion': conclusion
+    }
+
+def display_paragraph_validation_status(validation_status: Dict[str, Any]):
+    """Display paragraph validation status with appropriate styling"""
+    status = validation_status.get('status', 'unknown')
+    conclusion = validation_status.get('conclusion', 'Unknown status')
+    issues = validation_status.get('issues', [])
+    
+    if status == 'passed':
+        st.success(f"✅ Passed: {conclusion}")
+    elif status == 'partially_passed':
+        st.warning(f"⚠️ Partially Passed: {conclusion}")
+    elif status == 'not_passed':
+        st.error(f"❌ Not Passed: {conclusion}")
+    else:
+        st.info(f"ℹ️ {conclusion}")
+    
+    # Show detailed issues for this paragraph
+    if issues:
+        with st.expander(f"View {len(issues)} issue(s)", expanded=False):
+            for issue in issues:
+                severity_icon = {
+                    'high': '🔴',
+                    'medium': '🟡',
+                    'low': '🟢',
+                    'info': '🔵'
+                }.get(issue.get('severity', 'medium'), '⚪')
+                
+                st.write(f"{severity_icon} **{issue.get('issue_type', 'Issue').title()}**")
+                st.write(f"_{issue.get('description', 'No description')}_")
+                if issue.get('suggested_fix'):
+                    st.write(f"💡 {issue.get('suggested_fix', '')}")
+
 # Initialize session state
 if "report_id" not in st.session_state:
     st.session_state.report_id = None
@@ -371,7 +444,7 @@ elif page == "🤖 Generate Content":
 
 # View Results Page
 elif page == "📊 View Results":
-    st.header("📊 View Results")
+    st.header("📊 Dashboard - Report & Validation Analysis")
     
     if not st.session_state.segments:
         st.info("No segments to display. Create and generate content first.")
@@ -390,7 +463,7 @@ elif page == "📊 View Results":
         
         st.divider()
         
-        # Show generated content
+        # Two-column layout: Report on left, Validation on right
         for i, segment in enumerate(st.session_state.segments):
             st.subheader(f"{i+1}. {segment['name']}")
             
@@ -398,8 +471,88 @@ elif page == "📊 View Results":
             if status == 'completed':
                 st.success("✅ Completed")
                 content = segment.get('generated_content', '')
+                validation_data = segment.get('validation_results', {})
+                
                 if content:
-                    st.text_area("Generated Content:", content, height=300, key=f"content_{i}")
+                    # Split into two columns
+                    left_col, right_col = st.columns([1.2, 0.8])
+                    
+                    with left_col:
+                        st.markdown("##### 📝 Generated Report")
+                        
+                        # Split content into paragraphs for validation display
+                        paragraphs = content.split('\n\n')
+                        
+                        # Display content with paragraph-level validation
+                        for p_idx, paragraph in enumerate(paragraphs):
+                            if paragraph.strip():
+                                # Create expandable section for each paragraph
+                                with st.expander(f"Paragraph {p_idx + 1}", expanded=True):
+                                    st.write(paragraph.strip())
+                                    
+                                    # Add paragraph-level validation status
+                                    validation_status = get_paragraph_validation(validation_data, p_idx, paragraph)
+                                    display_paragraph_validation_status(validation_status)
+                    
+                    with right_col:
+                        st.markdown("##### 🔍 Validation Analysis")
+                        
+                        if validation_data:
+                            # Overall validation summary
+                            quality_score = validation_data.get('overall_quality_score', 0.0)
+                            total_issues = validation_data.get('total_issues', 0)
+                            
+                            # Quality score with color coding
+                            if quality_score >= 0.8:
+                                st.success(f"Quality Score: {quality_score:.2f}")
+                            elif quality_score >= 0.6:
+                                st.warning(f"Quality Score: {quality_score:.2f}")
+                            else:
+                                st.error(f"Quality Score: {quality_score:.2f}")
+                            
+                            st.metric("Total Issues", total_issues)
+                            
+                            # Issues breakdown
+                            issues_by_severity = validation_data.get('issues_by_severity', {})
+                            if issues_by_severity:
+                                st.write("**Issues by Severity:**")
+                                for severity, count in issues_by_severity.items():
+                                    if count > 0:
+                                        color = {
+                                            'high': '🔴',
+                                            'medium': '🟡', 
+                                            'low': '🟡',
+                                            'info': '🔵'
+                                        }.get(severity, '⚪')
+                                        st.write(f"{color} {severity.title()}: {count}")
+                            
+                            # Detailed validation issues
+                            validation_issues = validation_data.get('validation_issues', [])
+                            if validation_issues:
+                                st.write("**Detailed Issues:**")
+                                for issue in validation_issues[:5]:  # Show top 5 issues
+                                    severity_color = {
+                                        'high': '🔴',
+                                        'medium': '🟡', 
+                                        'low': '🟢',
+                                        'info': '🔵'
+                                    }.get(issue.get('severity', 'medium'), '⚪')
+                                    
+                                    with st.expander(f"{severity_color} {issue.get('issue_type', 'Issue').title()}", expanded=False):
+                                        st.write(f"**Description:** {issue.get('description', 'No description')}")
+                                        if issue.get('text_span'):
+                                            st.write(f"**Text:** _{issue.get('text_span', '')}_")
+                                        if issue.get('suggested_fix'):
+                                            st.write(f"**Suggested Fix:** {issue.get('suggested_fix', '')}")
+                                        st.write(f"**Confidence:** {issue.get('confidence_score', 0):.2f}")
+                        else:
+                            st.info("No validation data available. Enable validation during content generation.")
+                            
+                            # Mock validation for demonstration
+                            st.write("**Sample Validation Analysis:**")
+                            st.success("🟢 Content accuracy: Good")
+                            st.success("🟢 Completeness: Satisfactory") 
+                            st.warning("🟡 Minor formatting issues detected")
                 else:
                     st.warning("No content available")
             elif status == 'generating':
