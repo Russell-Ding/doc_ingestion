@@ -1,10 +1,12 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 import structlog
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from app.core.database import get_db
 from app.services.agents import report_coordinator_agent
@@ -207,6 +209,42 @@ async def export_report(
     except Exception as e:
         logger.error("Failed to export report", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to export report")
+
+
+@router.get("/download/{filename}")
+async def download_report(filename: str):
+    """Download a generated report file"""
+    
+    try:
+        from app.core.config import settings
+        
+        # Construct the file path
+        export_directory = Path(settings.EXPORT_DIRECTORY)
+        file_path = export_directory / filename
+        
+        # Check if file exists
+        if not file_path.exists():
+            logger.error("Report file not found", filename=filename, path=str(file_path))
+            raise HTTPException(status_code=404, detail="Report file not found")
+        
+        # Security check: ensure the file is within the export directory
+        if not str(file_path.resolve()).startswith(str(export_directory.resolve())):
+            logger.error("Invalid file path", filename=filename)
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        logger.info("Downloading report file", filename=filename, file_size=file_path.stat().st_size)
+        
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to download report", error=str(e), filename=filename)
+        raise HTTPException(status_code=500, detail="Failed to download report")
 
 
 @router.delete("/{report_id}")

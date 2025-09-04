@@ -647,20 +647,27 @@ def show_generated_report(report):
         with left_col:
             st.markdown("##### 📝 Generated Content")
             
-            # Split content into paragraphs for validation display
+            # Display clean content without validation mixed in
             content = section.get('content', '')
             if content:
+                # Split content into paragraphs and display them cleanly
                 paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
                 
-                # Display content with paragraph-level validation
                 for p_idx, paragraph in enumerate(paragraphs):
-                    # Create expandable section for each paragraph
-                    with st.expander(f"Paragraph {p_idx + 1}", expanded=True):
+                    # Create a container for better visual alignment with validation column
+                    with st.container():
+                        # Add paragraph header with consistent styling
+                        st.markdown(f"**📄 Paragraph {p_idx + 1}**")
+                        
+                        # Display paragraph content in a clean format
                         st.write(paragraph)
                         
-                        # Add paragraph-level validation status
-                        validation_status = get_paragraph_validation(validation_data, paragraph)
-                        display_paragraph_validation_status(validation_status)
+                        # Add some visual spacing between paragraphs
+                        st.write("")  # Small spacer
+                        
+                    # Visual separator between paragraphs for clarity
+                    if p_idx < len(paragraphs) - 1:
+                        st.markdown("---")
             else:
                 st.warning("No content available for this section")
         
@@ -668,60 +675,93 @@ def show_generated_report(report):
             st.markdown("##### 🔍 Validation Analysis")
             
             if validation_data:
-                # Overall validation summary
+                # Section-level validation summary at the top
                 quality_score = validation_data.get('overall_quality_score', 0.0)
                 total_issues = validation_data.get('total_issues', 0)
                 
-                # Quality score with color coding
-                if quality_score >= 0.8:
-                    st.success(f"Quality Score: {quality_score:.2f}")
-                elif quality_score >= 0.6:
-                    st.warning(f"Quality Score: {quality_score:.2f}")
-                else:
-                    st.error(f"Quality Score: {quality_score:.2f}")
+                # Compact section metrics
+                col1, col2 = st.columns(2)
+                with col1:
+                    if quality_score >= 0.8:
+                        st.success(f"📊 {quality_score:.0%}")
+                    elif quality_score >= 0.6:
+                        st.warning(f"📊 {quality_score:.0%}")
+                    else:
+                        st.error(f"📊 {quality_score:.0%}")
+                    st.caption("Quality Score")
                 
-                st.metric("Total Issues", total_issues)
+                with col2:
+                    st.metric("Issues", total_issues)
                 
-                # Issues breakdown
-                issues_by_severity = validation_data.get('issues_by_severity', {})
-                if issues_by_severity and any(issues_by_severity.values()):
-                    st.write("**Issues by Severity:**")
-                    for severity, count in issues_by_severity.items():
-                        if count > 0:
-                            color = {
-                                'high': '🔴',
-                                'medium': '🟡', 
-                                'low': '🟢',
-                                'info': '🔵'
-                            }.get(severity, '⚪')
-                            st.write(f"{color} {severity.title()}: {count}")
+                st.markdown("---")
                 
-                # Detailed validation issues
-                validation_issues = validation_data.get('validation_issues', [])
-                if validation_issues:
-                    st.write("**Section Issues:**")
-                    for issue in validation_issues[:5]:  # Show top 5 issues
-                        severity_color = {
-                            'high': '🔴',
-                            'medium': '🟡', 
-                            'low': '🟢',
-                            'info': '🔵'
-                        }.get(issue.get('severity', 'medium'), '⚪')
+                # Paragraph-by-paragraph validation analysis aligned with content
+                st.markdown("**📋 Paragraph Analysis:**")
+                paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()] if content else []
+                
+                for p_idx, paragraph in enumerate(paragraphs):
+                    # Create matching container structure for alignment
+                    with st.container():
+                        validation_status = get_paragraph_validation(validation_data, paragraph)
+                        status = validation_status.get('status', 'unknown')
+                        conclusion = validation_status.get('conclusion', 'Unknown status')
+                        issues = validation_status.get('issues', [])
                         
-                        with st.expander(f"{severity_color} {issue.get('issue_type', 'Issue').title()}", expanded=False):
-                            st.write(f"**Description:** {issue.get('description', 'No description')}")
-                            if issue.get('text_span'):
-                                st.write(f"**Text:** _{issue.get('text_span', '')}_")
-                            if issue.get('suggested_fix'):
-                                st.write(f"**Suggested Fix:** {issue.get('suggested_fix', '')}")
-                            st.write(f"**Confidence:** {issue.get('confidence_score', 0):.2f}")
+                        # Header matching the content paragraph header
+                        st.markdown(f"**🔍 Paragraph {p_idx + 1} Analysis**")
+                        
+                        # Status indicator
+                        if status == 'passed':
+                            st.success(f"✅ {conclusion}")
+                        elif status == 'partially_passed':
+                            st.warning(f"⚠️ {conclusion}")
+                        elif status == 'not_passed':
+                            st.error(f"❌ {conclusion}")
+                        else:
+                            st.info(f"ℹ️ {conclusion}")
+                        
+                        # Show issues compactly
+                        if issues:
+                            st.write("**Issues:**")
+                            for issue in issues[:3]:  # Show max 3 issues per paragraph to keep it clean
+                                severity_icon = {
+                                    'high': '🔴',
+                                    'medium': '🟡',
+                                    'low': '🟢',
+                                    'info': '🔵'
+                                }.get(issue.get('severity', 'medium'), '⚪')
+                                
+                                issue_type = issue.get('issue_type', 'Issue')
+                                description = issue.get('description', 'No description')
+                                
+                                # Truncate long descriptions for compact display
+                                if len(description) > 60:
+                                    description = description[:57] + "..."
+                                
+                                st.write(f"{severity_icon} {issue_type}: {description}")
+                            
+                            if len(issues) > 3:
+                                st.write(f"... and {len(issues) - 3} more issues")
+                        else:
+                            st.write("**No issues detected** ✓")
+                        
+                        # Add spacing to match the content column
+                        st.write("")
+                    
+                    # Visual separator matching content column
+                    if p_idx < len(paragraphs) - 1:
+                        st.markdown("---")
                 
-                # Validation summary
-                summary = validation_data.get('summary', {})
-                if summary:
-                    st.write("**Overall Assessment:**")
-                    assessment = summary.get('overall_assessment', 'No assessment available')
-                    st.write(f"_{assessment}_")
+                # Section-level summary at the bottom
+                if paragraphs:  # Only show if we have paragraphs
+                    st.markdown("---")
+                    st.markdown("**📝 Section Summary:**")
+                    summary = validation_data.get('summary', {})
+                    if summary:
+                        assessment = summary.get('overall_assessment', 'No assessment available')
+                        st.write(f"_{assessment}_")
+                    else:
+                        st.write("_Section analysis completed._")
             else:
                 st.info("No validation data available for this section.")
                 
