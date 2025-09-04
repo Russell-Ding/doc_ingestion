@@ -54,6 +54,7 @@ class GenerateContentRequest(BaseModel):
 class DirectGenerationRequest(BaseModel):
     segment_data: Dict[str, Any]
     validation_enabled: bool = True
+    selected_document_ids: Optional[List[str]] = None
 
 
 @router.post("/", response_model=SegmentResponse)
@@ -239,7 +240,8 @@ async def generate_report_section(
         # Use the report coordinator agent to generate content
         task_data = {
             "segment_data": request.segment_data,
-            "validation_enabled": request.validation_enabled
+            "validation_enabled": request.validation_enabled,
+            "selected_document_ids": request.selected_document_ids
         }
         
         result = await report_coordinator_agent.execute(task_data)

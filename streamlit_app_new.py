@@ -48,12 +48,13 @@ def get_documents():
     except:
         return []
 
-def generate_segment_content(segment_data):
+def generate_segment_content(segment_data, selected_document_ids=None):
     """Generate content for a segment using the report coordinator"""
     try:
         data = {
             "segment_data": segment_data,
-            "validation_enabled": True
+            "validation_enabled": True,
+            "selected_document_ids": selected_document_ids or []
         }
         # Use the existing endpoint but with actual segment data
         response = requests.post(f"{API_BASE_URL}/segments/generate-report", json=data)
@@ -271,6 +272,9 @@ def generate_complete_report(title, segments, selected_documents):
     report_sections = []
     total_sections = len(segments)
     
+    # Extract document IDs from selected documents
+    selected_document_ids = [doc.get('id', doc.get('document_id')) for doc in selected_documents if doc.get('id') or doc.get('document_id')]
+    
     # Progress tracking
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -288,7 +292,7 @@ def generate_complete_report(title, segments, selected_documents):
                 "generation_settings": {}
             }
             
-            result = generate_segment_content(segment_data)
+            result = generate_segment_content(segment_data, selected_document_ids)
             
             if result and not result.get('error'):
                 content = result.get('generated_content', 'No content generated')

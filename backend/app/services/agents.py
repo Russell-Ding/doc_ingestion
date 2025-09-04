@@ -92,6 +92,7 @@ class DocumentFinderAgent(BaseAgent):
         segment_prompt = task_data.get("segment_prompt", "")
         required_document_types = task_data.get("required_document_types", [])
         max_documents = task_data.get("max_documents", 10)
+        selected_document_ids = task_data.get("selected_document_ids", None)
         
         if not segment_prompt:
             raise ValueError("segment_prompt is required")
@@ -99,7 +100,8 @@ class DocumentFinderAgent(BaseAgent):
         self.logger.info(
             "Finding relevant documents",
             segment_prompt_length=len(segment_prompt),
-            required_types=required_document_types
+            required_types=required_document_types,
+            selected_document_ids=selected_document_ids
         )
         
         # Analyze the prompt to understand document requirements
@@ -112,7 +114,8 @@ class DocumentFinderAgent(BaseAgent):
                 document_types=required_document_types if required_document_types else None,
                 max_results=max_documents,
                 include_tables=document_analysis.get("needs_tables", True),
-                focus_keywords=document_analysis.get("focus_keywords", [])
+                focus_keywords=document_analysis.get("focus_keywords", []),
+                document_ids=selected_document_ids  # Pass the selected document IDs to filter
             )
         except Exception as e:
             self.logger.warning(f"Document retrieval failed: {e}, proceeding with empty results")
@@ -522,6 +525,7 @@ class ReportCoordinatorAgent(BaseAgent):
         
         segment_data = task_data.get("segment_data", {})
         validation_enabled = task_data.get("validation_enabled", True)
+        selected_document_ids = task_data.get("selected_document_ids", None)
         
         if not segment_data:
             raise ValueError("segment_data is required")
@@ -532,7 +536,8 @@ class ReportCoordinatorAgent(BaseAgent):
         self.logger.info(
             "Coordinating segment generation",
             segment_name=segment_name,
-            validation_enabled=validation_enabled
+            validation_enabled=validation_enabled,
+            selected_document_ids=selected_document_ids
         )
         
         # Step 1: Find relevant documents
@@ -540,7 +545,8 @@ class ReportCoordinatorAgent(BaseAgent):
         doc_finder_result = await self.document_finder.execute({
             "segment_prompt": segment_prompt,
             "required_document_types": segment_data.get("required_document_types", []),
-            "max_documents": segment_data.get("max_documents", 10)
+            "max_documents": segment_data.get("max_documents", 10),
+            "selected_document_ids": selected_document_ids
         })
         
         if not doc_finder_result.success:

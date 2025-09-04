@@ -348,7 +348,8 @@ class RAGSystem:
         max_results: int = None,
         similarity_threshold: float = None,
         include_tables: bool = True,
-        focus_keywords: Optional[List[str]] = None
+        focus_keywords: Optional[List[str]] = None,
+        document_ids: Optional[List[str]] = None
     ) -> List[RetrievalResult]:
         """Retrieve relevant chunks using hybrid search"""
         
@@ -368,26 +369,28 @@ class RAGSystem:
             results = []
             
             # Semantic search in text collection
-            logger.info("Searching text collection", max_results=max_results // 2)
+            logger.info("Searching text collection", max_results=max_results // 2, document_ids=document_ids)
             text_results = await self._semantic_search(
                 query_embedding,
                 self.text_collection,
                 max_results=max_results // 2,
                 document_types=document_types,
-                retrieval_method="semantic"
+                retrieval_method="semantic",
+                document_ids=document_ids
             )
             logger.info("Text search completed", results_found=len(text_results))
             results.extend(text_results)
             
             # Semantic search in table collection (if enabled)
             if include_tables:
-                logger.info("Searching table collection", max_results=max_results // 2)
+                logger.info("Searching table collection", max_results=max_results // 2, document_ids=document_ids)
                 table_results = await self._semantic_search(
                     query_embedding,
                     self.table_collection,
                     max_results=max_results // 2,
                     document_types=document_types,
-                    retrieval_method="semantic"
+                    retrieval_method="semantic",
+                    document_ids=document_ids
                 )
                 logger.info("Table search completed", results_found=len(table_results))
                 results.extend(table_results)
@@ -397,7 +400,8 @@ class RAGSystem:
                 keyword_results = await self._keyword_search(
                     focus_keywords,
                     document_types=document_types,
-                    max_results=max_results // 4
+                    max_results=max_results // 4,
+                    document_ids=document_ids
                 )
                 results.extend(keyword_results)
             
@@ -406,7 +410,8 @@ class RAGSystem:
                 numerical_results = await self._numerical_table_search(
                     query,
                     document_types=document_types,
-                    max_results=max_results // 4
+                    max_results=max_results // 4,
+                    document_ids=document_ids
                 )
                 results.extend(numerical_results)
             
@@ -437,13 +442,17 @@ class RAGSystem:
         collection,
         max_results: int,
         document_types: Optional[List[str]] = None,
-        retrieval_method: str = "semantic"
+        retrieval_method: str = "semantic",
+        document_ids: Optional[List[str]] = None
     ) -> List[RetrievalResult]:
         """Perform semantic search on a collection"""
         
         where_clause = {}
         if document_types:
             where_clause["chunk_type"] = {"$in": document_types}
+        if document_ids:
+            # Filter by selected document IDs if provided
+            where_clause["document_id"] = {"$in": document_ids}
         
         try:
             results = collection.query(
@@ -483,7 +492,8 @@ class RAGSystem:
         self,
         keywords: List[str],
         document_types: Optional[List[str]] = None,
-        max_results: int = 10
+        max_results: int = 10,
+        document_ids: Optional[List[str]] = None
     ) -> List[RetrievalResult]:
         """Perform keyword-based search"""
         
@@ -493,8 +503,16 @@ class RAGSystem:
             # Search in text collection
             for keyword in keywords:
                 where_clause = {"$contains": keyword.lower()}
+                conditions = [where_clause]
                 if document_types:
-                    where_clause = {"$and": [where_clause, {"chunk_type": {"$in": document_types}}]}
+                    conditions.append({"chunk_type": {"$in": document_types}})
+                if document_ids:
+                    conditions.append({"document_id": {"$in": document_ids}})
+                
+                if len(conditions) > 1:
+                    where_clause = {"$and": conditions}
+                else:
+                    where_clause = conditions[0]
                 
                 text_results = self.text_collection.get(
                     where_document=where_clause,
@@ -525,7 +543,8 @@ class RAGSystem:
         self,
         query: str,
         document_types: Optional[List[str]] = None,
-        max_results: int = 5
+        max_results: int = 5,
+        document_ids: Optional[List[str]] = None
     ) -> List[RetrievalResult]:
         """Search for tables with numerical data relevant to the query"""
         
@@ -540,6 +559,9 @@ class RAGSystem:
             
             if document_types:
                 where_clause["$and"].append({"chunk_type": {"$in": document_types}})
+            
+            if document_ids:
+                where_clause["$and"].append({"document_id": {"$in": document_ids}})
             
             table_results = self.table_collection.get(
                 where=where_clause,
