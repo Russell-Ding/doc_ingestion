@@ -472,14 +472,15 @@ def generate_complete_report(title, segments, selected_documents):
 
 def get_paragraph_validation(validation_data, paragraph_text):
     """Get validation status for a specific paragraph"""
-    if not validation_data or not validation_data.get('validation_issues'):
+    # Backend returns 'issues', not 'validation_issues'
+    if not validation_data or not validation_data.get('issues'):
         return {
             'status': 'passed',
             'issues': [],
             'conclusion': 'No issues detected'
         }
     
-    validation_issues = validation_data.get('validation_issues', [])
+    validation_issues = validation_data.get('issues', [])
     paragraph_issues = []
     
     # Find issues that relate to this paragraph
@@ -641,6 +642,11 @@ def show_generated_report(report):
         # Get validation data for this section (if available)
         validation_data = section.get('validation_results') or section.get('metadata', {}).get('validation_results', {})
         
+        # Debug: Show what validation data we have (can be removed later)
+        if validation_data:
+            st.write(f"🔍 Debug: Validation data keys: {list(validation_data.keys())}")
+            st.write(f"🔍 Debug: Validation data preview: {str(validation_data)[:200]}...")
+        
         # Split into two columns
         left_col, right_col = st.columns([1.2, 0.8])
         
@@ -676,8 +682,13 @@ def show_generated_report(report):
             
             if validation_data:
                 # Section-level validation summary at the top
-                quality_score = validation_data.get('overall_quality_score', 0.0)
-                total_issues = validation_data.get('total_issues', 0)
+                # Map backend field names to expected dashboard names
+                quality_score = validation_data.get('overall_quality_score') or validation_data.get('confidence_score', 0.0)
+                total_issues = validation_data.get('total_issues')
+                if total_issues is None:
+                    # Calculate total issues from the issues array
+                    issues = validation_data.get('issues', [])
+                    total_issues = len(issues)
                 
                 # Compact section metrics
                 col1, col2 = st.columns(2)
@@ -756,9 +767,9 @@ def show_generated_report(report):
                 if paragraphs:  # Only show if we have paragraphs
                     st.markdown("---")
                     st.markdown("**📝 Section Summary:**")
-                    summary = validation_data.get('summary', {})
-                    if summary:
-                        assessment = summary.get('overall_assessment', 'No assessment available')
+                    # The backend returns 'overall_assessment' directly, not nested in 'summary'
+                    assessment = validation_data.get('overall_assessment', 'Section analysis completed.')
+                    if assessment and assessment != 'Section analysis completed.':
                         st.write(f"_{assessment}_")
                     else:
                         st.write("_Section analysis completed._")

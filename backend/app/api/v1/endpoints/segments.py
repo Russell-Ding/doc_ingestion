@@ -281,14 +281,17 @@ async def generate_report_section(
         
         logger.info("Report section generated", segment_name=request.segment_data.get("name"))
         
+        validation_data = result.data.get("validation", {})
+        
         return {
             "success": True,
             "generated_content": result.data.get("generated_content"),
+            "validation_results": validation_data,  # Top-level for Streamlit compatibility
             "generation_metadata": {
                 "execution_time_ms": result.execution_time_ms,
                 "documents_found": len(result.data.get("document_retrieval", {}).get("documents_found", [])),
                 "total_chunks": result.data.get("document_retrieval", {}).get("total_chunks", 0),
-                "validation_results": result.data.get("validation")
+                "validation_results": validation_data  # Also keep in metadata for backward compatibility
             }
         }
         
