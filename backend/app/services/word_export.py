@@ -234,15 +234,24 @@ class WordReportGenerator:
         # Find comments that apply to this paragraph content
         relevant_comments = []
         for comment in word_comments:
-            text_span = comment.get('text', '')
+            # Try to get text span from different possible fields
+            text_span = comment.get('text_span', comment.get('text', ''))
+            
+            # If we have a text span and it's in this paragraph content
             if text_span and text_span.strip() in content:
                 # Find the position of this text span in the current paragraph
-                start_pos = content.find(text_span)
+                start_pos = content.find(text_span.strip())
                 if start_pos != -1:
                     relevant_comment = comment.copy()
                     relevant_comment['start'] = start_pos
-                    relevant_comment['end'] = start_pos + len(text_span)
+                    relevant_comment['end'] = start_pos + len(text_span.strip())
                     relevant_comments.append(relevant_comment)
+            else:
+                # If no specific text span, add comment to the beginning of paragraph
+                relevant_comment = comment.copy()
+                relevant_comment['start'] = 0
+                relevant_comment['end'] = min(50, len(content))  # First 50 chars
+                relevant_comments.append(relevant_comment)
         
         if not relevant_comments:
             paragraph.add_run(content)

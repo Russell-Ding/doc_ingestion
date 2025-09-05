@@ -626,6 +626,24 @@ def show_generated_report(report):
     """Display the generated report with validation analysis"""
     st.subheader("📋 Dashboard - Report & Validation Analysis")
     
+    # Store report in session state to persist after downloads
+    st.session_state.current_report = report
+    
+    # Add custom CSS for dark text boxes
+    st.markdown("""
+    <style>
+    .stTextArea textarea {
+        background-color: #2E2E2E !important;
+        color: #FFFFFF !important;
+        border: 1px solid #4A4A4A !important;
+    }
+    .stTextArea label {
+        color: #FFFFFF !important;
+        font-weight: bold !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Report header
     st.markdown(f"# {report['title']}")
     st.caption(f"Generated on {report['generation_date']}")
@@ -773,79 +791,84 @@ def show_generated_report(report):
         # Download as Word document - direct generation like other formats
         include_validation = st.checkbox("Include AI validation comments", value=True, key="word_validation")
         
-        # Generate Word document content directly for download
-        with st.spinner("🔄 Preparing Word document..."):
-            try:
-                export_result = create_report_and_export_word(report, include_validation)
-                
-                if export_result and not export_result.get('error'):
-                    download_url = export_result.get('download_url')
-                    if download_url:
-                        # Download the file content
-                        word_content = download_word_document(download_url)
-                        
-                        if word_content:
-                            # Provide direct download button like other formats
-                            filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
-                            st.download_button(
-                                label="📄 Download Word Document",
-                                data=word_content,
-                                file_name=filename,
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True,
-                                type="primary",
-                                help="Professional Word document with validation comments (if enabled)"
-                            )
+        # Create prepare button to avoid immediate execution
+        if st.button("📄 Prepare Word Document", type="primary", use_container_width=True):
+            with st.spinner("🔄 Creating Word document..."):
+                try:
+                    export_result = create_report_and_export_word(report, include_validation)
+                    
+                    if export_result and not export_result.get('error'):
+                        download_url = export_result.get('download_url')
+                        if download_url:
+                            # Download the file content and store in session state
+                            word_content = download_word_document(download_url)
+                            
+                            if word_content:
+                                filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                                st.session_state.word_download_data = {
+                                    'content': word_content,
+                                    'filename': filename,
+                                    'type': 'advanced',
+                                    'validation_enabled': include_validation
+                                }
+                                st.success("✅ Word document prepared successfully!")
+                            else:
+                                # Store fallback
+                                basic_word_content = create_basic_word_content(report)
+                                st.session_state.word_download_data = {
+                                    'content': basic_word_content,
+                                    'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                                    'type': 'basic',
+                                    'validation_enabled': False
+                                }
+                                st.warning("⚠️ Using basic Word document (server connection issue)")
                         else:
-                            # Fallback: Show error but still provide basic download
-                            st.error("❌ Failed to fetch Word document from server")
-                            st.write("**Fallback Option:**")
                             basic_word_content = create_basic_word_content(report)
-                            st.download_button(
-                                label="📄 Download Basic Word Document",
-                                data=basic_word_content,
-                                file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                use_container_width=True,
-                                help="Basic Word document (server-generated version failed)"
-                            )
+                            st.session_state.word_download_data = {
+                                'content': basic_word_content,
+                                'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                                'type': 'basic',
+                                'validation_enabled': False
+                            }
+                            st.warning("⚠️ Using basic Word document (no download URL)")
                     else:
-                        st.error("❌ No download URL provided from server")
-                        # Fallback option
+                        error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
+                        st.error(f"❌ Word export failed: {error_msg}")
+                        # Store fallback
                         basic_word_content = create_basic_word_content(report)
-                        st.download_button(
-                            label="📄 Download Basic Word Document",
-                            data=basic_word_content,
-                            file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            use_container_width=True,
-                            help="Basic Word document (server connection issue)"
-                        )
-                else:
-                    error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
-                    st.error(f"❌ Word export failed: {error_msg}")
-                    # Provide fallback download
+                        st.session_state.word_download_data = {
+                            'content': basic_word_content,
+                            'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                            'type': 'basic',
+                            'validation_enabled': False
+                        }
+                        
+                except Exception as e:
+                    st.error(f"❌ Error generating Word document: {str(e)}")
+                    # Store fallback
                     basic_word_content = create_basic_word_content(report)
-                    st.download_button(
-                        label="📄 Download Basic Word Document",
-                        data=basic_word_content,
-                        file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True,
-                        help="Basic Word document (advanced features failed)"
-                    )
-            except Exception as e:
-                st.error(f"❌ Error generating Word document: {str(e)}")
-                # Provide fallback download
-                basic_word_content = create_basic_word_content(report)
-                st.download_button(
-                    label="📄 Download Basic Word Document",
-                    data=basic_word_content,
-                    file_name=f"{report['title'].replace(' ', '_')}_basic.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    help="Basic Word document (fallback option)"
-                )
+                    st.session_state.word_download_data = {
+                        'content': basic_word_content,
+                        'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                        'type': 'basic',
+                        'validation_enabled': False
+                    }
+        
+        # Show download button if data is prepared
+        if 'word_download_data' in st.session_state:
+            word_data = st.session_state.word_download_data
+            button_label = "📄 Download Word Document" if word_data['type'] == 'advanced' else "📄 Download Basic Word Document"
+            help_text = "Professional Word document with validation comments" if word_data['type'] == 'advanced' else "Basic Word document"
+            
+            # This download button won't cause page reload and report won't disappear
+            download_clicked = st.download_button(
+                label=button_label,
+                data=word_data['content'],
+                file_name=word_data['filename'],
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                help=help_text
+            )
     
     with col2:
         # Download as text

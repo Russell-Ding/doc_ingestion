@@ -206,26 +206,44 @@ async def export_report(
                 
                 # If validation data exists but doesn't have word_comments, generate them
                 if validation_data and not validation_data.get('word_comments'):
-                    validation_issues = validation_data.get('validation_issues', [])
+                    # Check for validation_issues or issues field
+                    validation_issues = validation_data.get('validation_issues') or validation_data.get('issues', [])
                     if validation_issues:
                         word_comments = []
+                        content = segment_data.get('generated_content', '')
+                        
                         for i, issue in enumerate(validation_issues):
-                            comment_id = f"validation_{segment_id}_{i+1}"
+                            # Get the text span that this issue refers to
+                            text_span = issue.get('text_span', issue.get('text', ''))
+                            
+                            # If no text_span, try to extract from content based on issue description
+                            if not text_span and content:
+                                # Use first sentence of content as fallback
+                                sentences = content.split('. ')
+                                text_span = sentences[0] if sentences else content[:100]
+                            
                             comment = {
-                                "id": comment_id,
+                                "id": f"validation_{segment_id}_{i+1}",
                                 "text": f"[{issue.get('issue_type', 'Issue').upper()}] {issue.get('description', 'No description')}",
-                                "start": issue.get('start_position', 0),
-                                "end": issue.get('end_position', 1),
+                                "start": 0,  # Will be calculated by Word export service
+                                "end": len(text_span) if text_span else 1,
                                 "author": "AI Validator",
                                 "date": datetime.now().isoformat(),
                                 "severity": issue.get('severity', 'medium'),
-                                "type": issue.get('issue_type', 'validation')
+                                "type": issue.get('issue_type', 'validation'),
+                                "text_span": text_span  # Add this for the Word service to find
                             }
+                            
                             if issue.get('suggested_fix'):
                                 comment["text"] += f"\n\nSuggested Fix: {issue.get('suggested_fix')}"
+                            
                             word_comments.append(comment)
                         
                         validation_data['word_comments'] = word_comments
+                        
+                        logger.info(f"Generated {len(word_comments)} word comments for segment {segment_id}")
+                    else:
+                        logger.info(f"No validation issues found for segment {segment_id}")
                 
                 validation_results.append(validation_data)
         
