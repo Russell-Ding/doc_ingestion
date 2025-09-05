@@ -200,7 +200,34 @@ async def export_report(
             if segment_id in _segments_storage:
                 segment_data = _segments_storage[segment_id]
                 segments.append(segment_data)
-                validation_results.append(segment_data.get('validation_results', {}))
+                
+                # Get validation results - ensure it has the validation_issues for Word comments
+                validation_data = segment_data.get('validation_results', {})
+                
+                # If validation data exists but doesn't have word_comments, generate them
+                if validation_data and not validation_data.get('word_comments'):
+                    validation_issues = validation_data.get('validation_issues', [])
+                    if validation_issues:
+                        word_comments = []
+                        for i, issue in enumerate(validation_issues):
+                            comment_id = f"validation_{segment_id}_{i+1}"
+                            comment = {
+                                "id": comment_id,
+                                "text": f"[{issue.get('issue_type', 'Issue').upper()}] {issue.get('description', 'No description')}",
+                                "start": issue.get('start_position', 0),
+                                "end": issue.get('end_position', 1),
+                                "author": "AI Validator",
+                                "date": datetime.now().isoformat(),
+                                "severity": issue.get('severity', 'medium'),
+                                "type": issue.get('issue_type', 'validation')
+                            }
+                            if issue.get('suggested_fix'):
+                                comment["text"] += f"\n\nSuggested Fix: {issue.get('suggested_fix')}"
+                            word_comments.append(comment)
+                        
+                        validation_data['word_comments'] = word_comments
+                
+                validation_results.append(validation_data)
         
         # Sort segments by order_index
         segments.sort(key=lambda x: x.get('order_index', 0))
