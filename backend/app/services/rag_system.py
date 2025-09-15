@@ -375,8 +375,8 @@ class RAGSystem:
             await self.initialize()
         
         max_results = max_results or settings.MAX_RETRIEVED_CHUNKS
-        similarity_threshold = similarity_threshold or settings.SIMILARITY_THRESHOLD
-        initial_count = settings.INITIAL_RETRIEVAL_COUNT
+        # No longer using similarity thresholds - just get top results per keyword
+        results_per_keyword = 10  # Fixed: 10 results per keyword phrase
         
         try:
             # Step 1: Extract keywords using LLM
@@ -392,99 +392,95 @@ class RAGSystem:
             
             results = []
             
-            # Step 2: Focused semantic searches using extracted key phrases
-            candidates_per_phrase = max(5, min(10, initial_count // len(extracted_keywords))) if extracted_keywords else 10
-            
-            for key_phrase in extracted_keywords[:5]:  # Limit to top 5 key phrases
-                logger.info("Performing semantic search with key phrase", phrase=key_phrase)
+            # Step 2: Focused semantic searches using extracted key phrases (10 results each)
+            for i, key_phrase in enumerate(extracted_keywords[:5]):  # Limit to top 5 key phrases
+                logger.info("Starting semantic search for key phrase", 
+                           phrase_index=i+1, 
+                           phrase=key_phrase, 
+                           max_results=results_per_keyword)
                 
                 # Generate embedding for the key phrase
                 phrase_embeddings = await bedrock_service.generate_embeddings([key_phrase])
                 phrase_embedding = phrase_embeddings[0]
+                logger.info("Generated phrase embedding", 
+                           phrase=key_phrase, 
+                           embedding_dim=len(phrase_embedding))
                 
-                # Search text collection using phrase embedding
+                # Search text collection using phrase embedding (get top 10)
                 text_results = await self._semantic_search(
                     phrase_embedding,
                     self.text_collection,
-                    max_results=candidates_per_phrase,
+                    max_results=results_per_keyword,
                     document_types=document_types,
                     retrieval_method=f"semantic_phrase_{key_phrase[:20]}",
                     document_ids=document_ids
                 )
+                logger.info("Text collection search completed", 
+                           phrase=key_phrase, 
+                           results_found=len(text_results),
+                           collection_count=self.text_collection.count() if self.text_collection else 0)
                 results.extend(text_results)
                 
-                # Search table collection if enabled
+                # Search table collection if enabled (get top 10)
                 if include_tables:
                     table_results = await self._semantic_search(
                         phrase_embedding,
                         self.table_collection,
-                        max_results=candidates_per_phrase,
+                        max_results=results_per_keyword,
                         document_types=document_types,
                         retrieval_method=f"semantic_phrase_{key_phrase[:20]}",
                         document_ids=document_ids
                     )
+                    logger.info("Table collection search completed", 
+                               phrase=key_phrase, 
+                               results_found=len(table_results),
+                               collection_count=self.table_collection.count() if self.table_collection else 0)
                     results.extend(table_results)
+                
+                logger.info("Phrase search summary", 
+                           phrase=key_phrase, 
+                           text_results=len(text_results),
+                           table_results=len(table_results) if include_tables else 0,
+                           total_results_so_far=len(results))
             
-            # Step 3: Fallback - Original query semantic search (reduced since we focus on phrases)
-            fallback_count = min(10, max_results * 2)  # Smaller fallback since phrases should be sufficient
+            # Note: No fallback search needed - focusing purely on key phrase results
+            logger.info("Completed all phrase-based searches", 
+                       total_candidates=len(results),
+                       unique_candidates=len(set(r.chunk_id for r in results)))
             
-            text_results = await self._semantic_search(
-                query_embedding,
-                self.text_collection,
-                max_results=fallback_count,
-                document_types=document_types,
-                retrieval_method="semantic_fallback",
-                document_ids=document_ids
-            )
-            results.extend(text_results)
-            
-            if include_tables:
-                table_results = await self._semantic_search(
-                    query_embedding,
-                    self.table_collection,
-                    max_results=fallback_count,
-                    document_types=document_types,
-                    retrieval_method="semantic_fallback",
-                    document_ids=document_ids
-                )
-                results.extend(table_results)
-            
-            # Legacy keyword search (if focus_keywords provided)
-            if focus_keywords:
-                keyword_results = await self._keyword_search(
-                    focus_keywords,
-                    document_types=document_types,
-                    max_results=10,
-                    document_ids=document_ids
-                )
-                results.extend(keyword_results)
-            
-            # Table-specific search for numerical/financial queries
-            if include_tables and self._is_numerical_query(query):
-                numerical_results = await self._numerical_table_search(
-                    query,
-                    document_types=document_types,
-                    max_results=10,
-                    document_ids=document_ids
-                )
-                results.extend(numerical_results)
-            
-            # Deduplicate and rank results with cross-encoder re-ranking
+            # Deduplicate and rank results with cross-encoder re-ranking (no thresholds)
             final_results = await self._deduplicate_and_rerank_results(
                 results,
                 query,
-                similarity_threshold,
                 max_results
             )
             
+            # Summary logging
+            total_candidates = len(results)
+            final_count = len(final_results)
+            
             logger.info(
-                "Retrieved relevant chunks",
+                "Retrieval process completed",
                 query_length=len(query),
+                extracted_keywords=extracted_keywords,
                 extracted_keywords_count=len(extracted_keywords),
-                total_results=len(final_results),
+                total_candidates_found=total_candidates,
+                candidates_after_dedup=len(set(r.chunk_id for r in results)) if results else 0,
+                final_results_after_rerank=final_count,
                 text_results=len([r for r in final_results if r.chunk_type in ['text', 'ocr_text']]),
-                table_results=len([r for r in final_results if 'table' in r.chunk_type])
+                table_results=len([r for r in final_results if 'table' in r.chunk_type]),
+                approach="keyword_phrase_top_k",
+                max_results_requested=max_results
             )
+            
+            # Log individual final results for debugging
+            for i, result in enumerate(final_results):
+                logger.debug("Final result", 
+                           rank=i+1,
+                           chunk_id=result.chunk_id,
+                           relevance_score=f"{result.relevance_score:.3f}",
+                           retrieval_method=result.retrieval_method,
+                           content_preview=result.content[:100])
             
             return final_results
             
@@ -495,26 +491,18 @@ class RAGSystem:
     async def _extract_keywords_with_llm(self, query: str) -> List[str]:
         """Extract up to 5 key keywords/phrases from user query using LLM"""
         
-        extraction_prompt = f"""
-        Extract 3-5 key phrases from the following user query that would be most effective for semantic search in a document database.
-        
-        Focus on:
-        - Specific concepts and terminology (not generic words)
-        - Financial metrics, ratios, or business terms
-        - Company-specific information or industry terms
-        - Multi-word phrases that capture meaning (preferred over single words)
-        
-        User Query: {query}
-        
-        Guidelines:
-        - Prefer phrases over single words (e.g., "cash flow analysis" vs "cash")
-        - Include specific financial terms (e.g., "debt-to-equity ratio", "revenue growth")
-        - Avoid generic words like "analysis", "report", "document"
-        - Focus on the core concepts being requested
-        
-        Return only a JSON array of strings:
-        ["key phrase 1", "specific term 2", "financial concept 3", "business metric 4"]
-        """
+        extraction_prompt = f"""Extract key phrases for semantic search from this query: {query}
+
+Return ONLY a JSON array with 3-5 focused phrases. No explanation, no text before or after the JSON.
+
+Focus on:
+- Financial metrics (debt-to-equity, cash flow, revenue growth)  
+- Business concepts (liquidity analysis, profitability metrics)
+- Multi-word phrases over single words
+- Specific terminology, not generic words
+
+JSON format:
+["phrase1", "phrase2", "phrase3"]"""
         
         try:
             result = await bedrock_service.generate_text(
@@ -523,15 +511,36 @@ class RAGSystem:
                 max_tokens=200
             )
             
+            # Extract content from the response
+            raw_content = result.get('content', '') if result else ''
+            logger.info("Raw keyword extraction response", content=raw_content[:200])
+            
+            if not raw_content:
+                logger.warning("Empty response from LLM for keyword extraction")
+                raise ValueError("Empty response")
+            
+            # Try to extract JSON from the response (in case it has extra text)
+            json_start = raw_content.find('[')
+            json_end = raw_content.rfind(']') + 1
+            
+            if json_start == -1 or json_end == 0:
+                logger.warning("No JSON array found in keyword extraction response", response=raw_content[:200])
+                raise ValueError("No valid JSON array found")
+            
+            json_content = raw_content[json_start:json_end]
+            logger.info("Extracted JSON content", json_content=json_content)
+            
             # Parse JSON response
             import json
-            keywords = json.loads(result['content'].strip())
+            keywords = json.loads(json_content)
             
             # Ensure we have a list and limit to 5 items
             if isinstance(keywords, list):
-                return keywords[:5]
+                filtered_keywords = [kw.strip() for kw in keywords if kw.strip()][:5]
+                logger.info("Successfully extracted keywords", keywords=filtered_keywords)
+                return filtered_keywords
             else:
-                logger.warning("Unexpected keyword extraction format", result=result['content'])
+                logger.warning("Unexpected keyword extraction format", result=keywords)
                 return [query]  # Fallback to original query
                 
         except Exception as e:
@@ -624,34 +633,77 @@ class RAGSystem:
             # Filter by selected document IDs if provided
             where_clause["document_id"] = {"$in": document_ids}
         
+        collection_name = getattr(collection, 'name', 'unknown')
+        logger.info("Starting semantic search", 
+                   collection=collection_name,
+                   max_results=max_results,
+                   where_clause=where_clause,
+                   embedding_dim=len(query_embedding),
+                   retrieval_method=retrieval_method)
+        
         try:
+            # Check collection has data
+            total_count = collection.count()
+            logger.info("Collection status", 
+                       collection=collection_name, 
+                       total_documents=total_count)
+            
+            if total_count == 0:
+                logger.warning("Collection is empty", collection=collection_name)
+                return []
+            
             results = collection.query(
                 query_embeddings=[query_embedding],
                 n_results=max_results,
                 where=where_clause if where_clause else None
             )
             
+            logger.info("ChromaDB query completed", 
+                       collection=collection_name,
+                       ids_found=len(results['ids'][0]) if results['ids'] and results['ids'][0] else 0,
+                       distances_range=f"{min(results['distances'][0]):.3f}-{max(results['distances'][0]):.3f}" if results['distances'] and results['distances'][0] else "N/A")
+            
             retrieval_results = []
-            for i, chunk_id in enumerate(results['ids'][0]):
-                result = RetrievalResult(
-                    chunk_id=chunk_id,
-                    document_id=results['metadatas'][0][i]['document_id'],
-                    content=results['documents'][0][i],
-                    chunk_type=results['metadatas'][0][i]['chunk_type'],
-                    page_number=results['metadatas'][0][i].get('page_number'),
-                    section_title=results['metadatas'][0][i].get('section_title'),
-                    table_data=None,  # Will be loaded separately if needed
-                    relevance_score=1.0 - results['distances'][0][i],  # Convert distance to similarity
-                    retrieval_method=retrieval_method
-                )
-                retrieval_results.append(result)
+            if results and results['ids'] and results['ids'][0]:
+                for i, chunk_id in enumerate(results['ids'][0]):
+                    distance = results['distances'][0][i]
+                    # ChromaDB uses cosine distance, convert to similarity score (0-1 range)
+                    # For cosine distance: similarity = 1 - distance, but clamp to avoid negatives
+                    similarity = max(0.0, 1.0 - distance)
+                    
+                    result = RetrievalResult(
+                        chunk_id=chunk_id,
+                        document_id=results['metadatas'][0][i]['document_id'],
+                        content=results['documents'][0][i],
+                        chunk_type=results['metadatas'][0][i]['chunk_type'],
+                        page_number=results['metadatas'][0][i].get('page_number'),
+                        section_title=results['metadatas'][0][i].get('section_title'),
+                        table_data=None,  # Will be loaded separately if needed
+                        relevance_score=similarity,
+                        retrieval_method=retrieval_method
+                    )
+                    retrieval_results.append(result)
+                    
+                    logger.debug("Result details", 
+                               chunk_id=chunk_id,
+                               similarity=f"{similarity:.3f}",
+                               content_preview=results['documents'][0][i][:100])
+            else:
+                logger.warning("No results returned from ChromaDB query", 
+                              collection=collection_name,
+                              where_clause=where_clause)
+            
+            logger.info("Semantic search completed", 
+                       collection=collection_name,
+                       results_count=len(retrieval_results),
+                       retrieval_method=retrieval_method)
             
             return retrieval_results
             
         except Exception as e:
             logger.error("Semantic search failed", 
                         error=str(e), 
-                        collection_name=getattr(collection, 'name', 'unknown'),
+                        collection_name=collection_name,
                         where_clause=where_clause,
                         max_results=max_results)
             import traceback
@@ -775,10 +827,9 @@ class RAGSystem:
         self,
         results: List[RetrievalResult],
         query: str,
-        similarity_threshold: float,
         max_results: int
     ) -> List[RetrievalResult]:
-        """Remove duplicates and re-rank results using cross-encoder"""
+        """Remove duplicates and re-rank results using cross-encoder (no thresholds)"""
         
         # Remove duplicates by chunk_id
         seen_chunks = set()
@@ -789,69 +840,59 @@ class RAGSystem:
                 seen_chunks.add(result.chunk_id)
                 unique_results.append(result)
         
-        # Filter by initial similarity threshold (lower threshold)
-        filtered_results = [
-            result for result in unique_results
-            if result.relevance_score >= similarity_threshold
-        ]
+        logger.info("Deduplication completed", 
+                   original_count=len(results),
+                   unique_count=len(unique_results))
         
-        if not filtered_results:
-            logger.warning("No results passed initial similarity threshold", threshold=similarity_threshold)
+        if not unique_results:
+            logger.warning("No results after deduplication")
             return []
         
-        # Initialize cross-encoder if we have many results to re-rank
-        if len(filtered_results) > max_results * 2:  # Only use cross-encoder if we have enough candidates
-            await self._initialize_cross_encoder()
-            
-            if self.cross_encoder:
-                try:
-                    # Prepare query-document pairs for cross-encoder
-                    query_doc_pairs = [(query, result.content) for result in filtered_results]
-                    
-                    # Get cross-encoder scores
-                    cross_scores = self.cross_encoder.predict(query_doc_pairs)
-                    
-                    # Update relevance scores with cross-encoder scores
-                    for i, result in enumerate(filtered_results):
-                        # Combine original score with cross-encoder score
-                        cross_score = float(cross_scores[i])
-                        # Weighted combination: 30% original, 70% cross-encoder
-                        result.relevance_score = 0.3 * result.relevance_score + 0.7 * cross_score
-                        result.retrieval_method += "_reranked"
-                    
-                    logger.info("Cross-encoder re-ranking completed", 
-                              candidates=len(filtered_results),
-                              reranked=len(cross_scores))
-                    
-                except Exception as e:
-                    logger.warning("Cross-encoder re-ranking failed, using original scores", error=str(e))
+        # Always use cross-encoder for re-ranking if we have results
+        await self._initialize_cross_encoder()
         
-        # Sort by updated relevance score (descending)
+        if self.cross_encoder and len(unique_results) > 1:
+            try:
+                # Prepare query-document pairs for cross-encoder
+                query_doc_pairs = [(query, result.content) for result in unique_results]
+                
+                # Get cross-encoder scores
+                cross_scores = self.cross_encoder.predict(query_doc_pairs)
+                
+                # Replace original scores entirely with cross-encoder scores
+                for i, result in enumerate(unique_results):
+                    cross_score = float(cross_scores[i])
+                    result.relevance_score = cross_score  # Use cross-encoder score directly
+                    result.retrieval_method += "_reranked"
+                
+                logger.info("Cross-encoder re-ranking completed", 
+                          candidates=len(unique_results),
+                          score_range=f"{min(cross_scores):.3f}-{max(cross_scores):.3f}")
+                
+            except Exception as e:
+                logger.warning("Cross-encoder re-ranking failed, using original scores", error=str(e))
+        else:
+            if not self.cross_encoder:
+                logger.info("Cross-encoder not available, using original scores")
+            else:
+                logger.info("Only one result, skipping cross-encoder")
+        
+        # Sort by relevance score (descending) and return top results
         ranked_results = sorted(
-            filtered_results,
+            unique_results,
             key=lambda x: x.relevance_score,
             reverse=True
         )
         
-        # Apply final threshold after re-ranking (higher threshold)
-        final_threshold = getattr(settings, 'RERANK_THRESHOLD', 0.7)
-        final_results = [
-            result for result in ranked_results
-            if result.relevance_score >= final_threshold
-        ]
+        # Return top results (no threshold filtering)
+        final_results = ranked_results[:max_results]
         
-        # If final threshold is too strict, fall back to original threshold
-        if not final_results and ranked_results:
-            logger.info("Final threshold too strict, using original results",
-                       final_threshold=final_threshold,
-                       original_threshold=similarity_threshold)
-            final_results = [
-                result for result in ranked_results
-                if result.relevance_score >= similarity_threshold
-            ]
+        logger.info("Re-ranking completed", 
+                   candidates=len(unique_results),
+                   final_count=len(final_results),
+                   top_score=f"{final_results[0].relevance_score:.3f}" if final_results else "N/A")
         
-        # Return top results
-        return final_results[:max_results]
+        return final_results
     
     def _deduplicate_and_rank_results(
         self,
