@@ -401,6 +401,107 @@ class BedrockService:
             logger.error("Streaming generation failed", error=str(e))
             raise
     
+    async def analyze_document_image(
+        self,
+        image_base64: str,
+        prompt: str,
+        max_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Analyze document image using Claude's vision capabilities"""
+        
+        if not self._check_rate_limits():
+            raise Exception("Rate limit or cost limit exceeded")
+        
+        if not self.runtime_client:
+            await self.initialize()
+        
+        # Refresh runtime client if using dynamic mode
+        await self._refresh_runtime_client_if_needed()
+        
+        max_tokens = max_tokens or 4000  # Higher limit for vision tasks
+        
+        try:
+            # Prepare the vision message for Claude
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+            
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": max_tokens,
+                "temperature": 0.1,  # Lower temperature for document analysis
+                "messages": messages
+            }
+            
+            response = self.runtime_client.invoke_model(
+                modelId=settings.BEDROCK_TEXT_MODEL,  # Claude Sonnet supports vision
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body)
+            )
+            
+            response_body = json.loads(response.get('body').read())
+            
+            # Track usage and cost
+            input_tokens = response_body.get('usage', {}).get('input_tokens', 0)
+            output_tokens = response_body.get('usage', {}).get('output_tokens', 0)
+            cost = self._estimate_cost(input_tokens, output_tokens)
+            
+            self._request_count += 1
+            self._daily_cost += cost
+            
+            extracted_text = response_body['content'][0]['text']
+            
+            result = {
+                'extracted_text': extracted_text,
+                'usage': {
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'total_tokens': input_tokens + output_tokens,
+                    'estimated_cost': cost
+                },
+                'model': settings.BEDROCK_TEXT_MODEL,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            logger.info(
+                "Document image analysis completed",
+                extracted_length=len(extracted_text),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost=cost
+            )
+            
+            return result
+            
+        except ClientError as e:
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            if error_code == 'ValidationException':
+                logger.error("Vision API validation error - model may not support vision", error=str(e))
+                raise Exception(f"Vision not supported: {e}")
+            else:
+                logger.error("Bedrock vision analysis error", error=str(e))
+                raise Exception(f"Vision analysis failed: {e}")
+        except Exception as e:
+            logger.error("Document image analysis failed", error=str(e))
+            raise
+
     async def validate_content(
         self,
         generated_content: str,

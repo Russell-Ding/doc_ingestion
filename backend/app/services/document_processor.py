@@ -7,11 +7,14 @@ import pandas as pd
 import pytesseract
 from PIL import Image
 import pdfplumber
+import fitz  # PyMuPDF for better PDF image extraction
 from docx import Document
 import structlog
 from datetime import datetime
 import json
 import uuid
+import base64
+from io import BytesIO
 
 from app.core.config import settings
 from app.services.bedrock import bedrock_service
@@ -108,11 +111,12 @@ class DocumentProcessor:
         document_name: str,
         document_id: str
     ) -> List[DocumentChunk]:
-        """Process PDF files with table extraction"""
+        """Process PDF files with advanced fallback for image-based PDFs"""
         chunks = []
         chunk_index = 0
         
         try:
+            # First attempt: Standard text extraction with pdfplumber
             with pdfplumber.open(file_path) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
                     # Extract text content
@@ -145,10 +149,57 @@ class DocumentProcessor:
                             chunks.append(table_chunk)
                             chunk_index += 1
             
+            # If no chunks extracted, try fallback methods for image-based PDFs
+            if len(chunks) == 0:
+                logger.warning(
+                    "No text extracted from PDF using standard method, trying fallback approaches",
+                    document_id=document_id,
+                    file_path=file_path
+                )
+                
+                # Try OCR-based extraction
+                ocr_chunks = await self._process_pdf_with_ocr(file_path, document_name, document_id)
+                if ocr_chunks:
+                    chunks.extend(ocr_chunks)
+                    logger.info(f"Extracted {len(ocr_chunks)} chunks using OCR fallback")
+                
+                # If OCR didn't work or produced poor results, try LLM vision
+                if len(chunks) == 0 or await self._should_try_llm_vision(chunks):
+                    try:
+                        llm_chunks = await self._process_pdf_with_llm_vision(file_path, document_name, document_id)
+                        if llm_chunks:
+                            # Replace OCR chunks with LLM chunks if LLM produced better results
+                            if len(llm_chunks) > len(chunks):
+                                chunks = llm_chunks
+                                logger.info(f"Using LLM vision results: {len(llm_chunks)} chunks")
+                            else:
+                                chunks.extend(llm_chunks)
+                                logger.info(f"Added {len(llm_chunks)} additional chunks from LLM vision")
+                    except Exception as llm_error:
+                        logger.warning(f"LLM vision fallback failed: {str(llm_error)}")
+                
+                # Final fallback: Create placeholder chunk with file info
+                if len(chunks) == 0:
+                    placeholder_chunk = DocumentChunk(
+                        content=f"Document: {document_name}\n\nThis appears to be an image-based PDF that could not be processed automatically. The document may contain scanned images, complex layouts, or protected content that requires manual review.",
+                        chunk_index=0,
+                        chunk_type="placeholder",
+                        page_number=1
+                    )
+                    chunks.append(placeholder_chunk)
+                    logger.warning(f"Created placeholder chunk for unprocessable PDF: {document_name}")
+            
+            logger.info(
+                "PDF processing completed",
+                document_id=document_id,
+                total_chunks=len(chunks),
+                processing_method="standard" if chunk_index > 0 else "fallback"
+            )
+            
             return chunks
             
         except Exception as e:
-            logger.error("PDF processing failed", error=str(e))
+            logger.error("PDF processing failed", error=str(e), document_id=document_id)
             raise
     
     async def _process_docx(
@@ -636,6 +687,214 @@ class DocumentProcessor:
         except Exception as e:
             logger.warning("Failed to extract DOCX table", error=str(e))
             return None
+    
+    async def _process_pdf_with_ocr(
+        self,
+        file_path: str,
+        document_name: str,
+        document_id: str
+    ) -> List[DocumentChunk]:
+        """Extract text from PDF using OCR (for image-based PDFs)"""
+        chunks = []
+        chunk_index = 0
+        
+        try:
+            # Use PyMuPDF to extract images from PDF pages
+            pdf_document = fitz.open(file_path)
+            
+            for page_num in range(len(pdf_document)):
+                page = pdf_document.load_page(page_num)
+                
+                # Convert page to image
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale for better OCR
+                img_data = pix.tobytes("png")
+                
+                # Process with OCR
+                image = Image.open(BytesIO(img_data))
+                
+                # Apply OCR with custom configuration for better results
+                custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?@#$%^&*()-_+=[]{}|;:\'\"<>/\\ '
+                
+                try:
+                    extracted_text = pytesseract.image_to_string(
+                        image, 
+                        config=custom_config,
+                        lang='eng'
+                    ).strip()
+                    
+                    if extracted_text and len(extracted_text) > 10:  # Only process if meaningful text
+                        # Clean up common OCR artifacts
+                        cleaned_text = self._clean_ocr_text(extracted_text)
+                        
+                        if cleaned_text:
+                            # Split into chunks
+                            text_chunks = self._split_text(cleaned_text)
+                            
+                            for text_chunk in text_chunks:
+                                chunk = DocumentChunk(
+                                    content=text_chunk,
+                                    chunk_index=chunk_index,
+                                    page_number=page_num + 1,
+                                    chunk_type="ocr_text"
+                                )
+                                chunks.append(chunk)
+                                chunk_index += 1
+                        
+                        logger.info(f"OCR extracted {len(extracted_text)} characters from page {page_num + 1}")
+                    else:
+                        logger.warning(f"OCR produced minimal text for page {page_num + 1}")
+                        
+                except Exception as ocr_error:
+                    logger.warning(f"OCR failed for page {page_num + 1}: {str(ocr_error)}")
+                    continue
+            
+            pdf_document.close()
+            
+            logger.info(f"OCR processing completed: {len(chunks)} chunks from {document_name}")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"OCR processing failed: {str(e)}", document_id=document_id)
+            return []
+    
+    async def _process_pdf_with_llm_vision(
+        self,
+        file_path: str,
+        document_name: str,
+        document_id: str
+    ) -> List[DocumentChunk]:
+        """Extract text from PDF using LLM vision capabilities (via Bedrock)"""
+        chunks = []
+        chunk_index = 0
+        
+        try:
+            # Check if Bedrock vision service is available
+            if not hasattr(bedrock_service, 'analyze_document_image'):
+                logger.warning("Bedrock vision service not available, skipping LLM vision processing")
+                return []
+            
+            pdf_document = fitz.open(file_path)
+            
+            # Process only first few pages to avoid excessive API calls
+            max_pages = min(5, len(pdf_document))
+            
+            for page_num in range(max_pages):
+                page = pdf_document.load_page(page_num)
+                
+                # Convert page to high-quality image
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+                img_data = pix.tobytes("png")
+                
+                # Encode image for Bedrock
+                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                
+                try:
+                    # Use Bedrock vision to analyze the document image
+                    analysis_result = await bedrock_service.analyze_document_image(
+                        image_base64=img_base64,
+                        prompt=f"Analyze this document page from '{document_name}' and extract all visible text content. Preserve the original structure and formatting. Include tables, headers, and any other textual information."
+                    )
+                    
+                    if analysis_result and analysis_result.get('extracted_text'):
+                        extracted_text = analysis_result['extracted_text'].strip()
+                        
+                        if len(extracted_text) > 20:  # Ensure meaningful content
+                            # Split into chunks
+                            text_chunks = self._split_text(extracted_text)
+                            
+                            for text_chunk in text_chunks:
+                                chunk = DocumentChunk(
+                                    content=text_chunk,
+                                    chunk_index=chunk_index,
+                                    page_number=page_num + 1,
+                                    chunk_type="llm_vision_text"
+                                )
+                                chunks.append(chunk)
+                                chunk_index += 1
+                            
+                            logger.info(f"LLM vision extracted {len(extracted_text)} characters from page {page_num + 1}")
+                        
+                except Exception as llm_error:
+                    logger.warning(f"LLM vision failed for page {page_num + 1}: {str(llm_error)}")
+                    continue
+            
+            pdf_document.close()
+            
+            logger.info(f"LLM vision processing completed: {len(chunks)} chunks from {document_name}")
+            return chunks
+            
+        except Exception as e:
+            logger.error(f"LLM vision processing failed: {str(e)}", document_id=document_id)
+            return []
+    
+    def _clean_ocr_text(self, text: str) -> str:
+        """Clean up common OCR artifacts and errors"""
+        if not text:
+            return ""
+        
+        # Remove excessive whitespace
+        text = ' '.join(text.split())
+        
+        # Fix common OCR character substitutions
+        replacements = {
+            '|': 'I',  # Common OCR error
+            '0': 'O',  # In contexts where O makes more sense
+            '5': 'S',  # In contexts where S makes more sense
+            'rn': 'm',  # Common OCR confusion
+            '\\': '/',  # Backslash confusion
+        }
+        
+        # Apply only contextually appropriate replacements
+        for old, new in replacements.items():
+            if old in text:
+                # Only replace if it improves readability (simple heuristic)
+                test_replacement = text.replace(old, new)
+                if len(test_replacement.split()) > len(text.split()) * 0.9:  # Preserve most words
+                    text = test_replacement
+        
+        # Remove lines that are mostly non-alphabetic (likely OCR artifacts)
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if len(line) < 3:  # Skip very short lines
+                continue
+                
+            # Count alphabetic characters
+            alpha_count = sum(1 for c in line if c.isalpha())
+            if alpha_count / len(line) >= 0.3:  # At least 30% alphabetic
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
+    
+    async def _should_try_llm_vision(self, existing_chunks: List[DocumentChunk]) -> bool:
+        """Determine if LLM vision should be attempted based on OCR results quality"""
+        if not existing_chunks:
+            return True
+        
+        # Calculate quality metrics for existing chunks
+        total_chars = sum(len(chunk.content) for chunk in existing_chunks)
+        total_words = sum(chunk.word_count for chunk in existing_chunks)
+        
+        # If we have very little content, try LLM vision
+        if total_chars < 100 or total_words < 20:
+            return True
+        
+        # Check for OCR quality indicators
+        poor_quality_indicators = 0
+        total_content = ' '.join(chunk.content for chunk in existing_chunks)
+        
+        # Look for common OCR issues
+        if '|' in total_content:  # Vertical lines often misrecognized
+            poor_quality_indicators += 1
+        if total_content.count('rn') > total_words * 0.1:  # Excessive 'rn' vs 'm' confusion
+            poor_quality_indicators += 1
+        if len([c for c in total_content if c.isalpha()]) / len(total_content) < 0.5:  # Low alphabetic ratio
+            poor_quality_indicators += 1
+        
+        # If multiple quality issues detected, try LLM vision
+        return poor_quality_indicators >= 2
 
 
 # Global document processor instance

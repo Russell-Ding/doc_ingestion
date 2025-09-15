@@ -171,21 +171,53 @@ async def delete_document(
     document_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete a document and all its data"""
+    """Delete a document and all its data including files"""
     
     try:
-        # Remove from RAG system
+        # Get document info before deletion for file cleanup
+        document_summary = await rag_system.get_document_summary(document_id)
+        if not document_summary:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Remove from RAG system first
         await rag_system.delete_document(document_id)
         
-        # In a real implementation, also delete from database and file storage
+        # Clean up uploaded file from disk
+        try:
+            # Look for file with this document_id prefix in uploads directory
+            base_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
+            upload_dir = base_dir / "uploads"
+            
+            if upload_dir.exists():
+                # Find files that start with the document_id
+                for file_path in upload_dir.glob(f"{document_id}_*"):
+                    try:
+                        file_path.unlink()  # Delete the file
+                        logger.info("Deleted file from disk", file_path=str(file_path))
+                    except Exception as file_error:
+                        logger.warning("Failed to delete file from disk", 
+                                     file_path=str(file_path), 
+                                     error=str(file_error))
+        except Exception as cleanup_error:
+            logger.warning("File cleanup failed", error=str(cleanup_error))
+            # Don't fail the whole operation if file cleanup fails
         
-        logger.info("Document deleted successfully", document_id=document_id)
+        logger.info("Document deleted successfully", 
+                   document_id=document_id,
+                   document_name=document_summary.get("document_name", "Unknown"))
         
-        return {"message": "Document deleted successfully"}
+        return {
+            "message": "Document deleted successfully",
+            "document_id": document_id,
+            "document_name": document_summary.get("document_name", "Unknown"),
+            "chunks_removed": document_summary.get("total_chunks", 0)
+        }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to delete document", error=str(e), document_id=document_id)
-        raise HTTPException(status_code=500, detail="Failed to delete document")
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 
 @router.get("/{document_id}/chunks")

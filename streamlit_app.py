@@ -105,6 +105,15 @@ def export_report(report_id, format_type="word", include_validations=True):
         st.error(f"Failed to export report: {str(e)}")
         return None
 
+def delete_document(document_id):
+    """Delete document from backend"""
+    try:
+        response = requests.delete(f"{API_BASE_URL}/documents/{document_id}")
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Delete failed: {str(e)}")
+        return None
+
 def get_paragraph_validation(validation_data: Dict[str, Any], paragraph_index: int, paragraph_text: str) -> Dict[str, Any]:
     """Get validation status for a specific paragraph"""
     if not validation_data or not validation_data.get('validation_issues'):
@@ -239,12 +248,60 @@ if page == "📄 Document Upload":
     st.session_state.documents = documents
     
     if documents:
+        # Enhanced document display with delete functionality
+        for i, doc in enumerate(documents):
+            doc_id = doc.get('id', doc.get('document_id'))
+            doc_name = doc.get('name', 'Unknown')
+            chunk_count = doc.get('chunk_count', 0)
+            
+            with st.expander(f"📄 {doc_name} ({chunk_count} chunks)", expanded=False):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    st.write(f"**ID:** {doc_id}")
+                    st.write(f"**Chunks:** {chunk_count}")
+                    st.write(f"**Size:** {doc.get('size', 0) / 1024:.1f} KB" if doc.get('size', 0) > 0 else "Unknown")
+                    st.write(f"**Upload Date:** {doc.get('upload_date', 'Unknown')}")
+                    
+                    if chunk_count == 0:
+                        st.warning("⚠️ This document has 0 chunks - processing may have failed")
+                
+                with col2:
+                    if st.button(f"🔍 Details", key=f"details_{doc_id}"):
+                        st.info(f"Document: {doc_name}")
+                
+                with col3:
+                    if st.button(f"🗑️ Delete", key=f"delete_{doc_id}", type="secondary"):
+                        st.session_state[f"confirm_delete_{doc_id}"] = True
+                
+                # Handle delete confirmation
+                if st.session_state.get(f"confirm_delete_{doc_id}", False):
+                    st.error(f"⚠️ Delete '{doc_name}'?")
+                    col_yes, col_no = st.columns(2)
+                    
+                    with col_yes:
+                        if st.button("✅ Yes", key=f"yes_{doc_id}"):
+                            with st.spinner("Deleting..."):
+                                result = delete_document(doc_id)
+                                if result:
+                                    st.success("✅ Deleted!")
+                                    st.session_state[f"confirm_delete_{doc_id}"] = False
+                                    time.sleep(1)
+                                    st.rerun()
+                    
+                    with col_no:
+                        if st.button("❌ No", key=f"no_{doc_id}"):
+                            st.session_state[f"confirm_delete_{doc_id}"] = False
+                            st.rerun()
+        
+        # Summary table
+        st.subheader("📊 Summary")
         doc_data = []
         for doc in documents:
             doc_data.append({
                 "Name": doc.get("name", "Unknown"),
                 "Chunks": doc.get("chunk_count", 0),
-                "Status": doc.get("status", "unknown"),
+                "Status": "⚠️ Failed" if doc.get("chunk_count", 0) == 0 else "✅ Success",
                 "Size": f"{doc.get('size', 0) / 1024:.1f} KB" if doc.get('size', 0) > 0 else "Unknown",
                 "Upload Date": doc.get("upload_date", "Unknown")
             })

@@ -40,6 +40,15 @@ def upload_document(file, document_name=None):
         st.error(f"Upload failed: {str(e)}")
         return None
 
+def delete_document(document_id):
+    """Delete document from backend"""
+    try:
+        response = requests.delete(f"{API_BASE_URL}/documents/{document_id}")
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Delete failed: {str(e)}")
+        return None
+
 def get_documents():
     """Get list of uploaded documents"""
     try:
@@ -257,28 +266,88 @@ def show_upload_page():
     documents = get_documents()
     
     if documents:
-        # Create a nice display of documents
-        cols = st.columns(min(3, len(documents)))
+        # Create a nice display of documents with delete buttons
+        st.subheader("📚 Document Library")
         
         for i, doc in enumerate(documents):
-            with cols[i % 3]:
-                with st.container():
-                    st.markdown(f"**{doc.get('name', 'Unknown')}**")
-                    st.write(f"📄 {doc.get('chunk_count', 0)} chunks")
-                    st.write(f"📅 {doc.get('upload_date', 'Unknown')[:10]}")
-                    st.write(f"💾 {doc.get('size', 0) / 1024:.1f} KB" if doc.get('size', 0) > 0 else "💾 Unknown size")
+            doc_id = doc.get('id', doc.get('document_id'))
+            doc_name = doc.get('name', 'Unknown')
+            chunk_count = doc.get('chunk_count', 0)
+            upload_date = doc.get('upload_date', 'Unknown')[:16] if doc.get('upload_date') else 'Unknown'
+            file_size = doc.get('size', 0)
+            
+            # Create expandable container for each document
+            with st.expander(f"📄 {doc_name} ({chunk_count} chunks)", expanded=False):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    st.write(f"**ID:** {doc_id}")
+                    st.write(f"**Chunks:** {chunk_count}")
+                    st.write(f"**Upload Date:** {upload_date}")
+                    st.write(f"**Size:** {file_size / 1024:.1f} KB" if file_size > 0 else "**Size:** Unknown")
+                    
+                    # Show special indicator for 0-chunk documents
+                    if chunk_count == 0:
+                        st.warning("⚠️ This document has 0 chunks - it may have failed to process or contains only images")
+                
+                with col2:
+                    if st.button(f"🔍 View Details", key=f"view_{doc_id}", use_container_width=True):
+                        # You could expand this to show more details
+                        st.info(f"Document details for {doc_name}")
+                
+                with col3:
+                    if st.button(f"🗑️ Delete", key=f"delete_{doc_id}", type="secondary", use_container_width=True):
+                        # Confirmation dialog using session state
+                        st.session_state[f"confirm_delete_{doc_id}"] = True
+                
+                # Handle delete confirmation
+                if st.session_state.get(f"confirm_delete_{doc_id}", False):
+                    st.error(f"⚠️ Are you sure you want to delete '{doc_name}'?")
+                    col_confirm, col_cancel = st.columns(2)
+                    
+                    with col_confirm:
+                        if st.button("✅ Yes, Delete", key=f"confirm_yes_{doc_id}", type="primary"):
+                            with st.spinner(f"Deleting {doc_name}..."):
+                                result = delete_document(doc_id)
+                                if result:
+                                    st.success(f"✅ {doc_name} deleted successfully!")
+                                    st.session_state[f"confirm_delete_{doc_id}"] = False
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ Failed to delete {doc_name}")
+                    
+                    with col_cancel:
+                        if st.button("❌ Cancel", key=f"confirm_no_{doc_id}"):
+                            st.session_state[f"confirm_delete_{doc_id}"] = False
+                            st.rerun()
         
-        # Also show as a table
-        st.subheader("📊 Document Details")
+        # Also show as a summary table
+        st.subheader("📊 Document Summary")
         doc_df = pd.DataFrame([{
             "Document Name": doc.get("name", "Unknown"),
             "Chunks": doc.get("chunk_count", 0),
-            "Status": doc.get("status", "unknown"),
+            "Status": "⚠️ Needs Review" if doc.get("chunk_count", 0) == 0 else "✅ Processed",
             "Size (KB)": f"{doc.get('size', 0) / 1024:.1f}" if doc.get('size', 0) > 0 else "Unknown",
             "Upload Date": doc.get("upload_date", "Unknown")[:16] if doc.get("upload_date") else "Unknown"
         } for doc in documents])
         
         st.dataframe(doc_df, use_container_width=True)
+        
+        # Quick stats
+        total_docs = len(documents)
+        zero_chunk_docs = len([d for d in documents if d.get('chunk_count', 0) == 0])
+        total_chunks = sum(d.get('chunk_count', 0) for d in documents)
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Documents", total_docs)
+        with col2:
+            st.metric("Total Chunks", total_chunks)
+        with col3:
+            st.metric("Failed Processing", zero_chunk_docs)
+            if zero_chunk_docs > 0:
+                st.caption("⚠️ Documents with 0 chunks may need reprocessing")
     else:
         st.info("📭 No documents uploaded yet. Use the uploader above to get started.")
 
