@@ -8,6 +8,7 @@ import structlog
 from datetime import datetime
 from dataclasses import dataclass
 from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import CrossEncoder
 
 from app.core.config import settings
 from app.services.bedrock import bedrock_service
@@ -39,6 +40,8 @@ class RAGSystem:
         self.table_collection = None
         self.metadata_collection = None
         self._initialized = False
+        self.cross_encoder = None
+        self._cross_encoder_initialized = False
     
     async def initialize(self):
         """Initialize the RAG system with vector databases"""
@@ -63,6 +66,21 @@ class RAGSystem:
         except Exception as e:
             logger.error("Failed to initialize RAG system", error=str(e))
             raise
+    
+    async def _initialize_cross_encoder(self):
+        """Initialize cross-encoder for re-ranking (lazy loading)"""
+        if self._cross_encoder_initialized:
+            return
+        
+        try:
+            # Use a lightweight cross-encoder model for re-ranking
+            model_name = "ms-marco-MiniLM-L-6-v2"
+            self.cross_encoder = CrossEncoder(model_name)
+            self._cross_encoder_initialized = True
+            logger.info("Cross-encoder initialized successfully", model=model_name)
+        except Exception as e:
+            logger.warning("Failed to initialize cross-encoder, will skip re-ranking", error=str(e))
+            self.cross_encoder = None
     
     async def _ensure_correct_collections(self):
         """Ensure collections exist with correct embedding dimensions"""
@@ -358,6 +376,7 @@ class RAGSystem:
         
         max_results = max_results or settings.MAX_RETRIEVED_CHUNKS
         similarity_threshold = similarity_threshold or settings.SIMILARITY_THRESHOLD
+        initial_count = settings.INITIAL_RETRIEVAL_COUNT
         
         try:
             # Step 1: Extract keywords using LLM
@@ -373,16 +392,18 @@ class RAGSystem:
             
             results = []
             
-            # Step 2: Multiple keyword-based queries (max 10 chunks each)
+            # Step 2: Multiple keyword-based queries with higher initial retrieval count
+            candidates_per_keyword = max(5, initial_count // len(extracted_keywords)) if extracted_keywords else initial_count
+            
             for keyword in extracted_keywords[:5]:  # Limit to top 5 keywords
                 logger.info("Searching with keyword", keyword=keyword)
                 
-                # Search text collection
+                # Search text collection with higher limit
                 text_results = await self._semantic_search_with_keyword(
                     query_embedding,
                     keyword,
                     self.text_collection,
-                    max_results=10,  # Max 10 chunks per query
+                    max_results=candidates_per_keyword,
                     document_types=document_types,
                     retrieval_method="semantic_keyword",
                     document_ids=document_ids
@@ -395,18 +416,18 @@ class RAGSystem:
                         query_embedding,
                         keyword,
                         self.table_collection,
-                        max_results=10,  # Max 10 chunks per query
+                        max_results=candidates_per_keyword,
                         document_types=document_types,
                         retrieval_method="semantic_keyword",
                         document_ids=document_ids
                     )
                     results.extend(table_results)
             
-            # Step 3: Original query semantic search (for fallback)
+            # Step 3: Original query semantic search with higher limit
             text_results = await self._semantic_search(
                 query_embedding,
                 self.text_collection,
-                max_results=10,
+                max_results=initial_count // 2,  # Half for text
                 document_types=document_types,
                 retrieval_method="semantic",
                 document_ids=document_ids
@@ -417,7 +438,7 @@ class RAGSystem:
                 table_results = await self._semantic_search(
                     query_embedding,
                     self.table_collection,
-                    max_results=10,
+                    max_results=initial_count // 2,  # Half for tables
                     document_types=document_types,
                     retrieval_method="semantic",
                     document_ids=document_ids
@@ -444,9 +465,10 @@ class RAGSystem:
                 )
                 results.extend(numerical_results)
             
-            # Deduplicate and rank results
-            final_results = self._deduplicate_and_rank_results(
+            # Deduplicate and rank results with cross-encoder re-ranking
+            final_results = await self._deduplicate_and_rerank_results(
                 results,
+                query,
                 similarity_threshold,
                 max_results
             )
@@ -734,13 +756,95 @@ class RAGSystem:
         query_lower = query.lower()
         return any(keyword in query_lower for keyword in numerical_keywords)
     
+    async def _deduplicate_and_rerank_results(
+        self,
+        results: List[RetrievalResult],
+        query: str,
+        similarity_threshold: float,
+        max_results: int
+    ) -> List[RetrievalResult]:
+        """Remove duplicates and re-rank results using cross-encoder"""
+        
+        # Remove duplicates by chunk_id
+        seen_chunks = set()
+        unique_results = []
+        
+        for result in results:
+            if result.chunk_id not in seen_chunks:
+                seen_chunks.add(result.chunk_id)
+                unique_results.append(result)
+        
+        # Filter by initial similarity threshold (lower threshold)
+        filtered_results = [
+            result for result in unique_results
+            if result.relevance_score >= similarity_threshold
+        ]
+        
+        if not filtered_results:
+            logger.warning("No results passed initial similarity threshold", threshold=similarity_threshold)
+            return []
+        
+        # Initialize cross-encoder if we have many results to re-rank
+        if len(filtered_results) > max_results * 2:  # Only use cross-encoder if we have enough candidates
+            await self._initialize_cross_encoder()
+            
+            if self.cross_encoder:
+                try:
+                    # Prepare query-document pairs for cross-encoder
+                    query_doc_pairs = [(query, result.content) for result in filtered_results]
+                    
+                    # Get cross-encoder scores
+                    cross_scores = self.cross_encoder.predict(query_doc_pairs)
+                    
+                    # Update relevance scores with cross-encoder scores
+                    for i, result in enumerate(filtered_results):
+                        # Combine original score with cross-encoder score
+                        cross_score = float(cross_scores[i])
+                        # Weighted combination: 30% original, 70% cross-encoder
+                        result.relevance_score = 0.3 * result.relevance_score + 0.7 * cross_score
+                        result.retrieval_method += "_reranked"
+                    
+                    logger.info("Cross-encoder re-ranking completed", 
+                              candidates=len(filtered_results),
+                              reranked=len(cross_scores))
+                    
+                except Exception as e:
+                    logger.warning("Cross-encoder re-ranking failed, using original scores", error=str(e))
+        
+        # Sort by updated relevance score (descending)
+        ranked_results = sorted(
+            filtered_results,
+            key=lambda x: x.relevance_score,
+            reverse=True
+        )
+        
+        # Apply final threshold after re-ranking (higher threshold)
+        final_threshold = getattr(settings, 'RERANK_THRESHOLD', 0.7)
+        final_results = [
+            result for result in ranked_results
+            if result.relevance_score >= final_threshold
+        ]
+        
+        # If final threshold is too strict, fall back to original threshold
+        if not final_results and ranked_results:
+            logger.info("Final threshold too strict, using original results",
+                       final_threshold=final_threshold,
+                       original_threshold=similarity_threshold)
+            final_results = [
+                result for result in ranked_results
+                if result.relevance_score >= similarity_threshold
+            ]
+        
+        # Return top results
+        return final_results[:max_results]
+    
     def _deduplicate_and_rank_results(
         self,
         results: List[RetrievalResult],
         similarity_threshold: float,
         max_results: int
     ) -> List[RetrievalResult]:
-        """Remove duplicates and rank results by relevance"""
+        """Legacy method - kept for backward compatibility"""
         
         # Remove duplicates by chunk_id
         seen_chunks = set()

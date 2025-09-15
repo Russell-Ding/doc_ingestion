@@ -68,8 +68,10 @@ class Settings(BaseSettings):
     # RAG Configuration  
     VECTOR_DB_TYPE: str = "chroma"  # ChromaDB only (no pgvector dependency)
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"
-    MAX_RETRIEVED_CHUNKS: int = 10
-    SIMILARITY_THRESHOLD: float = 0.5
+    MAX_RETRIEVED_CHUNKS: int = 5  # Final number after re-ranking
+    INITIAL_RETRIEVAL_COUNT: int = 50  # Initial candidates before re-ranking
+    SIMILARITY_THRESHOLD: float = 0.3  # Lower threshold for initial retrieval
+    RERANK_THRESHOLD: float = 0.7  # Higher threshold for final results after re-ranking
     
     # ChromaDB Settings
     CHROMA_HOST: str = "localhost" 

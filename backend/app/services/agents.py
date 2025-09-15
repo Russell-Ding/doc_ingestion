@@ -202,11 +202,36 @@ class DocumentFinderAgent(BaseAgent):
                 temperature=0.1
             )
             
-            analysis = json.loads(result['content'])
+            # Extract content from the response
+            raw_content = result.get('content', '') if result else ''
+            
+            if not raw_content:
+                self.logger.warning("Empty response from LLM for document analysis")
+                raise ValueError("Empty response")
+            
+            # Try to extract JSON from the response (in case it has extra text)
+            json_start = raw_content.find('{')
+            json_end = raw_content.rfind('}') + 1
+            
+            if json_start == -1 or json_end == 0:
+                self.logger.warning("No JSON found in document analysis response", response=raw_content[:200])
+                raise ValueError("No valid JSON found")
+            
+            json_content = raw_content[json_start:json_end]
+            
+            # Parse the JSON response
+            analysis = json.loads(json_content)
+            
+            # Validate that required keys exist
+            required_keys = ["needs_tables", "focus_keywords", "document_types_needed", "content_priority"]
+            for key in required_keys:
+                if key not in analysis:
+                    analysis[key] = self._get_default_value(key, segment_prompt)
+            
             return analysis
             
-        except json.JSONDecodeError as e:
-            self.logger.warning("Failed to parse document analysis", error=str(e))
+        except (json.JSONDecodeError, ValueError) as e:
+            self.logger.warning("Failed to parse document analysis", error=str(e), response=raw_content[:200] if 'raw_content' in locals() else "No content")
             # Fallback analysis
             return {
                 "needs_tables": "financial" in segment_prompt.lower() or "data" in segment_prompt.lower(),
@@ -226,6 +251,18 @@ class DocumentFinderAgent(BaseAgent):
                 "specific_requirements": [],
                 "expected_sections": []
             }
+    
+    def _get_default_value(self, key: str, segment_prompt: str):
+        """Get default value for missing analysis keys"""
+        defaults = {
+            "needs_tables": "financial" in segment_prompt.lower() or "data" in segment_prompt.lower(),
+            "focus_keywords": [],
+            "document_types_needed": [],
+            "content_priority": "mixed",
+            "specific_requirements": [],
+            "expected_sections": []
+        }
+        return defaults.get(key, None)
 
 
 class ContentGeneratorAgent(BaseAgent):

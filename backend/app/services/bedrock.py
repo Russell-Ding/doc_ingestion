@@ -83,7 +83,7 @@ class BedrockService:
                     return bedrock_utils.get_runtime
             except ImportError:
                 pass
-            
+
             # If function path is specified, load from there
             if settings.BEDROCK_RUNTIME_FUNCTION_PATH:
                 function_path = Path(settings.BEDROCK_RUNTIME_FUNCTION_PATH)

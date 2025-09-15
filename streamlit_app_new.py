@@ -698,16 +698,17 @@ def show_generated_report(report):
     # Store report in session state to persist after downloads
     st.session_state.current_report = report
     
-    # Add custom CSS for dark text boxes
+    # Add custom CSS for better text visibility
     st.markdown("""
     <style>
     .stTextArea textarea {
-        background-color: #2E2E2E !important;
-        color: #FFFFFF !important;
-        border: 1px solid #4A4A4A !important;
+        background-color: #F0F2F6 !important;
+        color: #262730 !important;
+        border: 1px solid #CCCCCC !important;
+        font-family: 'Source Code Pro', monospace !important;
     }
     .stTextArea label {
-        color: #FFFFFF !important;
+        color: #262730 !important;
         font-weight: bold !important;
     }
     </style>
