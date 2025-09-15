@@ -392,44 +392,48 @@ class RAGSystem:
             
             results = []
             
-            # Step 2: Multiple keyword-based queries with higher initial retrieval count
-            candidates_per_keyword = max(5, initial_count // len(extracted_keywords)) if extracted_keywords else initial_count
+            # Step 2: Focused semantic searches using extracted key phrases
+            candidates_per_phrase = max(5, min(10, initial_count // len(extracted_keywords))) if extracted_keywords else 10
             
-            for keyword in extracted_keywords[:5]:  # Limit to top 5 keywords
-                logger.info("Searching with keyword", keyword=keyword)
+            for key_phrase in extracted_keywords[:5]:  # Limit to top 5 key phrases
+                logger.info("Performing semantic search with key phrase", phrase=key_phrase)
                 
-                # Search text collection with higher limit
-                text_results = await self._semantic_search_with_keyword(
-                    query_embedding,
-                    keyword,
+                # Generate embedding for the key phrase
+                phrase_embeddings = await bedrock_service.generate_embeddings([key_phrase])
+                phrase_embedding = phrase_embeddings[0]
+                
+                # Search text collection using phrase embedding
+                text_results = await self._semantic_search(
+                    phrase_embedding,
                     self.text_collection,
-                    max_results=candidates_per_keyword,
+                    max_results=candidates_per_phrase,
                     document_types=document_types,
-                    retrieval_method="semantic_keyword",
+                    retrieval_method=f"semantic_phrase_{key_phrase[:20]}",
                     document_ids=document_ids
                 )
                 results.extend(text_results)
                 
                 # Search table collection if enabled
                 if include_tables:
-                    table_results = await self._semantic_search_with_keyword(
-                        query_embedding,
-                        keyword,
+                    table_results = await self._semantic_search(
+                        phrase_embedding,
                         self.table_collection,
-                        max_results=candidates_per_keyword,
+                        max_results=candidates_per_phrase,
                         document_types=document_types,
-                        retrieval_method="semantic_keyword",
+                        retrieval_method=f"semantic_phrase_{key_phrase[:20]}",
                         document_ids=document_ids
                     )
                     results.extend(table_results)
             
-            # Step 3: Original query semantic search with higher limit
+            # Step 3: Fallback - Original query semantic search (reduced since we focus on phrases)
+            fallback_count = min(10, max_results * 2)  # Smaller fallback since phrases should be sufficient
+            
             text_results = await self._semantic_search(
                 query_embedding,
                 self.text_collection,
-                max_results=initial_count // 2,  # Half for text
+                max_results=fallback_count,
                 document_types=document_types,
-                retrieval_method="semantic",
+                retrieval_method="semantic_fallback",
                 document_ids=document_ids
             )
             results.extend(text_results)
@@ -438,9 +442,9 @@ class RAGSystem:
                 table_results = await self._semantic_search(
                     query_embedding,
                     self.table_collection,
-                    max_results=initial_count // 2,  # Half for tables
+                    max_results=fallback_count,
                     document_types=document_types,
-                    retrieval_method="semantic",
+                    retrieval_method="semantic_fallback",
                     document_ids=document_ids
                 )
                 results.extend(table_results)
@@ -492,13 +496,24 @@ class RAGSystem:
         """Extract up to 5 key keywords/phrases from user query using LLM"""
         
         extraction_prompt = f"""
-        Extract up to 5 key words or phrases from the following user query that would be most useful for searching a document database. 
-        Focus on specific terms, concepts, financial metrics, company names, or industry-specific terminology.
+        Extract 3-5 key phrases from the following user query that would be most effective for semantic search in a document database.
+        
+        Focus on:
+        - Specific concepts and terminology (not generic words)
+        - Financial metrics, ratios, or business terms
+        - Company-specific information or industry terms
+        - Multi-word phrases that capture meaning (preferred over single words)
         
         User Query: {query}
         
-        Return only a JSON array of strings, nothing else:
-        ["keyword1", "phrase2", "concept3", "metric4", "term5"]
+        Guidelines:
+        - Prefer phrases over single words (e.g., "cash flow analysis" vs "cash")
+        - Include specific financial terms (e.g., "debt-to-equity ratio", "revenue growth")
+        - Avoid generic words like "analysis", "report", "document"
+        - Focus on the core concepts being requested
+        
+        Return only a JSON array of strings:
+        ["key phrase 1", "specific term 2", "financial concept 3", "business metric 4"]
         """
         
         try:
