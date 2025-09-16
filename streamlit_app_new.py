@@ -322,12 +322,15 @@ def show_upload_page():
 
     with st.expander("🚀 Ultimate AI Fallback Processing", expanded=False):
         st.markdown("""
-        **When to use this option:**
-        - Traditional document processing failed (0 chunks created)
-        - Poor quality extraction from scanned PDFs or images
-        - Complex layouts that standard tools can't handle
-        - Documents with mixed content types (charts, tables, text)
-        - Need better semantic understanding of content
+        **🌟 Perfect for:**
+        - 📷 Scanned document images (photos of pages)
+        - 🖼️ Screenshots of documents or reports
+        - 📋 Images with text, tables, or charts
+        - 📄 Plain text files needing AI enhancement
+
+        **⚠️ Limited support:**
+        - PDF files (provides guidance on conversion)
+        - Word documents (suggests alternative approaches)
         """)
 
         col1, col2 = st.columns([3, 1])
@@ -336,8 +339,8 @@ def show_upload_page():
             # File upload for Sonnet processing
             sonnet_uploaded_file = st.file_uploader(
                 "Select document for AI processing",
-                type=['pdf', 'docx', 'doc', 'txt', 'rtf', 'jpg', 'jpeg', 'png', 'bmp', 'tiff'],
-                help="Supported formats: PDF, Word, Text, RTF, Images (Max: 10MB)",
+                type=['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'txt', 'pdf'],
+                help="🌟 BEST: Images (JPG, PNG) | Good: Text files | Limited: PDF (guidance only)",
                 key="sonnet_uploader"
             )
 
@@ -480,10 +483,10 @@ def show_upload_page():
             st.write("• PDF format preferred")
 
         with col_tip2:
-            st.write("**For Scanned Documents:**")
-            st.write("• Use 'comprehensive' mode")
-            st.write("• High-resolution images work better")
-            st.write("• Clean, clear text is essential")
+            st.write("**For Document Images:**")
+            st.write("• Take clear, high-resolution photos")
+            st.write("• Ensure good lighting and contrast")
+            st.write("• Use 'comprehensive' mode for mixed content")
 
     st.markdown("---")
 

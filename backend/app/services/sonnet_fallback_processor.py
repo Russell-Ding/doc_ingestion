@@ -31,7 +31,8 @@ class SonnetFallbackProcessor:
 
     def __init__(self):
         self.max_file_size = 10 * 1024 * 1024  # 10MB limit for Sonnet processing
-        self.supported_formats = {'.pdf', '.docx', '.doc', '.txt', '.rtf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        # Focus on image formats where Sonnet vision excels
+        self.supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.pdf', '.txt'}
 
     async def process_document_with_sonnet(
         self,
@@ -166,41 +167,76 @@ class SonnetFallbackProcessor:
 
             # Call Sonnet via Bedrock
             if mime_type.startswith('image/'):
-                # For images, use multimodal capabilities
-                response = await bedrock_service.call_anthropic_claude(
+                # For images, use vision capabilities directly
+                response = await bedrock_service.analyze_document_image(
+                    image_base64=file_base64,
                     prompt=prompt,
-                    images=[{
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": file_base64
-                    }]
+                    max_tokens=4000
                 )
-            else:
-                # For documents, include file content in prompt
-                full_prompt = f"""
+                # Extract the text from the vision response
+                if response and response.get("extracted_text"):
+                    extracted_text = response["extracted_text"]
+                else:
+                    logger.warning("Sonnet vision returned empty response", file_path=str(file_path))
+                    return ""
+            elif file_extension == '.txt':
+                # For text files, read directly and enhance with AI
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    raw_text = f.read()
+
+                enhance_prompt = f"""
 {prompt}
 
-File: {file_path.name}
-File Type: {mime_type}
+Please clean, structure and enhance the following text content:
 
-Please analyze and extract text from this document. The file content is provided as base64:
+{raw_text}
 
-{file_base64}
-
-Focus on extracting all readable text content while maintaining structure and meaning.
+Focus on:
+1. Cleaning up any formatting issues
+2. Organizing into logical sections
+3. Preserving all important information
+4. Improving readability while maintaining accuracy
 """
-                response = await bedrock_service.call_anthropic_claude(prompt=full_prompt)
 
-            if response and response.get("content"):
-                extracted_text = response["content"]
+                response = await bedrock_service.generate_text(
+                    prompt=enhance_prompt,
+                    max_tokens=4000,
+                    temperature=0.1
+                )
 
-                # Clean and format extracted text
-                extracted_text = self._clean_extracted_text(extracted_text)
-
-                return extracted_text
+                if response and response.get("content"):
+                    extracted_text = response["content"]
+                else:
+                    # Fallback to raw text if AI processing fails
+                    extracted_text = raw_text
             else:
-                logger.warning("Sonnet returned empty response", file_path=str(file_path))
-                return ""
+                # For other file types, provide helpful guidance
+                extracted_text = f"""
+🚨 **Sonnet Fallback Limitation**
+
+The file "{file_path.name}" ({file_extension}) cannot be directly processed by Claude Sonnet via the API.
+
+**Recommended approaches:**
+1. **For PDFs**: Convert to high-quality images (PNG/JPG) and re-upload
+2. **For Word docs**: Export as PDF, then convert to images
+3. **For best results**: Use the regular document upload feature instead
+
+**What Sonnet Fallback works best with:**
+- 📷 Images of documents (JPG, PNG, etc.)
+- 📄 Plain text files
+- 📋 Screenshots of document pages
+
+**Current file**: {file_extension} format
+**Size**: {len(file_content)} bytes
+**MIME type**: {mime_type}
+
+Try converting this document to an image format for optimal AI processing!
+"""
+
+            # Clean and format extracted text
+            extracted_text = self._clean_extracted_text(extracted_text)
+
+            return extracted_text
 
         except Exception as e:
             logger.error("Error extracting text with Sonnet", error=str(e), file_path=str(file_path))
