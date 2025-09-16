@@ -15,6 +15,8 @@ import json
 import uuid
 import base64
 from io import BytesIO
+import cv2
+import numpy as np
 
 from app.core.config import settings
 from app.services.bedrock import bedrock_service
@@ -709,15 +711,18 @@ class DocumentProcessor:
                 pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x scale for better OCR
                 img_data = pix.tobytes("png")
                 
-                # Process with OCR
+                # Process with OCR after image preprocessing
                 image = Image.open(BytesIO(img_data))
-                
-                # Apply OCR with custom configuration for better results
-                custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?@#$%^&*()-_+=[]{}|;:\'\"<>/\\ '
-                
+
+                # Preprocess image for better OCR results
+                processed_image = self._preprocess_image_for_ocr(image)
+
+                # Apply OCR with optimized configuration for word spacing
+                custom_config = r'--oem 3 --psm 6'  # Removed character whitelist that can cause spacing issues
+
                 try:
                     extracted_text = pytesseract.image_to_string(
-                        image, 
+                        processed_image,
                         config=custom_config,
                         lang='eng'
                     ).strip()
@@ -828,45 +833,58 @@ class DocumentProcessor:
             return []
     
     def _clean_ocr_text(self, text: str) -> str:
-        """Clean up common OCR artifacts and errors"""
+        """Clean up common OCR artifacts and improve word spacing"""
         if not text:
             return ""
-        
-        # Remove excessive whitespace
-        text = ' '.join(text.split())
-        
-        # Fix common OCR character substitutions
-        replacements = {
-            '|': 'I',  # Common OCR error
-            '0': 'O',  # In contexts where O makes more sense
-            '5': 'S',  # In contexts where S makes more sense
-            'rn': 'm',  # Common OCR confusion
-            '\\': '/',  # Backslash confusion
-        }
-        
-        # Apply only contextually appropriate replacements
-        for old, new in replacements.items():
-            if old in text:
-                # Only replace if it improves readability (simple heuristic)
-                test_replacement = text.replace(old, new)
-                if len(test_replacement.split()) > len(text.split()) * 0.9:  # Preserve most words
-                    text = test_replacement
-        
-        # Remove lines that are mostly non-alphabetic (likely OCR artifacts)
+
+        # First pass: Fix obvious OCR character errors that affect spacing
+        text = text.replace('|', 'I')  # Vertical bars often mistaken for I
+        text = text.replace('rn', 'm')  # Common OCR confusion
+        text = text.replace('vv', 'w')  # Another common confusion
+        text = text.replace('ii', 'll')  # Double i often should be ll
+
+        # Fix spacing issues: add spaces around punctuation when missing
+        import re
+        text = re.sub(r'([a-zA-Z])([.!?,:;])([a-zA-Z])', r'\1\2 \3', text)
+        text = re.sub(r'([a-zA-Z])([A-Z])', lambda m: f'{m.group(1)} {m.group(2)}' if m.group(1).islower() else m.group(0), text)
+
+        # Fix concatenated words by adding spaces before capital letters in the middle of "words"
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+
+        # Add spaces after common punctuation if missing
+        text = re.sub(r'([.!?,:;])([a-zA-Z])', r'\1 \2', text)
+
+        # Fix number-letter concatenations
+        text = re.sub(r'(\d)([a-zA-Z])', r'\1 \2', text)
+        text = re.sub(r'([a-zA-Z])(\d)', r'\1 \2', text)
+
+        # Clean up excessive whitespace but preserve line breaks
         lines = text.split('\n')
         cleaned_lines = []
-        
+
         for line in lines:
-            line = line.strip()
-            if len(line) < 3:  # Skip very short lines
+            # Clean whitespace within the line
+            cleaned_line = ' '.join(line.split())
+
+            if len(cleaned_line) < 2:  # Skip very short lines
                 continue
-                
-            # Count alphabetic characters
-            alpha_count = sum(1 for c in line if c.isalpha())
-            if alpha_count / len(line) >= 0.3:  # At least 30% alphabetic
-                cleaned_lines.append(line)
-        
-        return '\n'.join(cleaned_lines)
+
+            # Count alphabetic characters to filter out garbage
+            if cleaned_line:
+                alpha_count = sum(1 for c in cleaned_line if c.isalpha())
+                total_valid = sum(1 for c in cleaned_line if c.isalnum() or c.isspace() or c in '.,!?:;()-"\'')
+
+                # Keep lines with reasonable character distribution
+                if alpha_count >= 2 and (alpha_count / len(cleaned_line)) >= 0.2 and (total_valid / len(cleaned_line)) >= 0.8:
+                    cleaned_lines.append(cleaned_line)
+
+        result = '\n'.join(cleaned_lines)
+
+        # Final cleanup: remove any remaining double spaces
+        result = re.sub(r'\s+', ' ', result)
+        result = result.replace('\n ', '\n').replace(' \n', '\n')
+
+        return result.strip()
     
     async def _should_try_llm_vision(self, existing_chunks: List[DocumentChunk]) -> bool:
         """Determine if LLM vision should be attempted based on OCR results quality"""
@@ -895,6 +913,61 @@ class DocumentProcessor:
         
         # If multiple quality issues detected, try LLM vision
         return poor_quality_indicators >= 2
+
+    def _preprocess_image_for_ocr(self, image: Image.Image) -> Image.Image:
+        """Preprocess image to improve OCR accuracy and word spacing"""
+        try:
+            # Convert PIL image to OpenCV format
+            opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+            # Convert to grayscale
+            gray = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2GRAY)
+
+            # Apply noise reduction
+            denoised = cv2.medianBlur(gray, 3)
+
+            # Enhance contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(denoised)
+
+            # Apply morphological operations to improve text structure
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1))
+            processed = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel)
+
+            # Apply Gaussian blur to smooth edges
+            smoothed = cv2.GaussianBlur(processed, (1, 1), 0)
+
+            # Apply adaptive thresholding for better text-background separation
+            binary = cv2.adaptiveThreshold(
+                smoothed,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                11,
+                2
+            )
+
+            # Apply dilation to ensure proper character spacing
+            spacing_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+            spaced = cv2.dilate(binary, spacing_kernel, iterations=1)
+
+            # Convert back to PIL image
+            processed_pil = Image.fromarray(spaced)
+
+            # Resize if too small (OCR works better on larger images)
+            width, height = processed_pil.size
+            if width < 1000 or height < 1000:
+                scale_factor = max(1000 / width, 1000 / height)
+                new_width = int(width * scale_factor)
+                new_height = int(height * scale_factor)
+                processed_pil = processed_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            logger.debug("Image preprocessing completed successfully")
+            return processed_pil
+
+        except Exception as e:
+            logger.warning(f"Image preprocessing failed, using original: {str(e)}")
+            return image
 
 
 # Global document processor instance
