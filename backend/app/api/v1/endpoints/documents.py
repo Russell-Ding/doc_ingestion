@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.services.document_processor import document_processor
 from app.services.rag_system import rag_system
 from app.services.public_document_fetcher import public_document_fetcher
+from app.services.sonnet_fallback_processor import sonnet_fallback_processor
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -316,3 +317,117 @@ async def fetch_public_company_documents(
     except Exception as e:
         logger.error("Public document fetch endpoint failed", error=str(e))
         raise HTTPException(status_code=500, detail=f"Failed to fetch public documents: {str(e)}")
+
+
+@router.post("/upload-sonnet-fallback")
+async def upload_document_with_sonnet_fallback(
+    file: UploadFile = File(...),
+    document_name: Optional[str] = Form(None),
+    processing_mode: Optional[str] = Form("comprehensive"),
+    focus_areas: Optional[str] = Form(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """Upload and process a document using Sonnet fallback when normal processing fails"""
+
+    # Validate file type
+    file_extension = Path(file.filename or "").suffix.lower()
+    sonnet_supported_types = [".pdf", ".docx", ".doc", ".txt", ".rtf", ".jpg", ".jpeg", ".png", ".bmp", ".tiff"]
+
+    if file_extension not in sonnet_supported_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type for Sonnet processing. Supported types: {sonnet_supported_types}"
+        )
+
+    # Validate file size (10MB limit for Sonnet)
+    content = await file.read()
+    file_size = len(content)
+    max_size_bytes = 10 * 1024 * 1024  # 10MB
+
+    if file_size > max_size_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large for Sonnet processing. Maximum size: 10MB"
+        )
+
+    try:
+        # Generate document ID and file path
+        document_id = str(uuid.uuid4())
+        # Get the base directory (backend folder)
+        base_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
+        upload_dir = base_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = upload_dir / f"{document_id}_{file.filename}"
+
+        # Save file to disk
+        async with aiofiles.open(file_path, 'wb') as f:
+            await f.write(content)
+
+        # Prepare processing options
+        processing_options = {
+            "mode": processing_mode,
+            "focus_areas": focus_areas.split(",") if focus_areas else []
+        }
+
+        logger.info(
+            "Starting Sonnet fallback processing",
+            document_id=document_id,
+            filename=file.filename,
+            processing_mode=processing_mode,
+            file_size=file_size
+        )
+
+        # Process with Sonnet fallback
+        result = await sonnet_fallback_processor.process_and_add_to_rag(
+            file_path=str(file_path),
+            document_name=document_name or file.filename or "untitled",
+            processing_options=processing_options
+        )
+
+        # Clean up uploaded file
+        try:
+            file_path.unlink()
+        except:
+            pass
+
+        if result["success"]:
+            logger.info(
+                "Sonnet fallback processing completed successfully",
+                document_id=result["document_id"],
+                filename=file.filename,
+                chunks_created=result["chunks_created"]
+            )
+
+            return {
+                "document_id": result["document_id"],
+                "filename": file.filename,
+                "file_size": file_size,
+                "chunks_created": result["chunks_created"],
+                "processing_status": "completed",
+                "processing_method": "sonnet_fallback",
+                "extracted_text_length": result.get("extracted_text_length", 0),
+                "message": f"Document processed successfully with Sonnet AI fallback. Created {result['chunks_created']} chunks."
+            }
+        else:
+            logger.error(
+                "Sonnet fallback processing failed",
+                filename=file.filename,
+                error=result["error"]
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Sonnet processing failed: {result['error']}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Sonnet fallback upload failed", error=str(e), filename=file.filename)
+
+        # Clean up file if it was created
+        if 'file_path' in locals() and Path(file_path).exists():
+            Path(file_path).unlink()
+
+        raise HTTPException(status_code=500, detail=f"Sonnet document processing failed: {str(e)}")

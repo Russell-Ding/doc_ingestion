@@ -82,6 +82,24 @@ def fetch_public_company_documents(ticker_symbol, exchange, quarter=None, year=N
         st.error(f"Failed to fetch public company documents: {str(e)}")
         return None
 
+def upload_document_with_sonnet_fallback(file, document_name=None, processing_mode="comprehensive", focus_areas=None):
+    """Upload document using Sonnet AI fallback processing"""
+    files = {"file": file}
+    data = {}
+    if document_name:
+        data["document_name"] = document_name
+    if processing_mode:
+        data["processing_mode"] = processing_mode
+    if focus_areas:
+        data["focus_areas"] = focus_areas
+
+    try:
+        response = requests.post(f"{API_BASE_URL}/documents/upload-sonnet-fallback", files=files, data=data)
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Sonnet fallback upload failed: {str(e)}")
+        return None
+
 def generate_segment_content(segment_data, selected_document_ids=None):
     """Generate content for a segment using the report coordinator"""
     try:
@@ -298,6 +316,177 @@ def show_upload_page():
     # Separator
     st.markdown("---")
 
+    # Ultimate Fallback Processing Section
+    st.header("🧠 AI-Powered Document Processing (Sonnet Fallback)")
+    st.write("When traditional document processing fails or you're not satisfied with results, use our AI-powered fallback with Claude Sonnet.")
+
+    with st.expander("🚀 Ultimate AI Fallback Processing", expanded=False):
+        st.markdown("""
+        **When to use this option:**
+        - Traditional document processing failed (0 chunks created)
+        - Poor quality extraction from scanned PDFs or images
+        - Complex layouts that standard tools can't handle
+        - Documents with mixed content types (charts, tables, text)
+        - Need better semantic understanding of content
+        """)
+
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            # File upload for Sonnet processing
+            sonnet_uploaded_file = st.file_uploader(
+                "Select document for AI processing",
+                type=['pdf', 'docx', 'doc', 'txt', 'rtf', 'jpg', 'jpeg', 'png', 'bmp', 'tiff'],
+                help="Supported formats: PDF, Word, Text, RTF, Images (Max: 10MB)",
+                key="sonnet_uploader"
+            )
+
+            # Document name
+            if sonnet_uploaded_file:
+                sonnet_document_name = st.text_input(
+                    "Document Name (Optional)",
+                    value=sonnet_uploaded_file.name.rsplit('.', 1)[0],
+                    help="Custom name for the document",
+                    key="sonnet_doc_name"
+                )
+
+        with col2:
+            # Processing options
+            st.markdown("**⚙️ Processing Options**")
+
+            processing_mode = st.selectbox(
+                "Processing Mode",
+                options=["comprehensive", "financial", "legal"],
+                help="""
+                • Comprehensive: Extract all content
+                • Financial: Focus on financial data
+                • Legal: Preserve legal language
+                """,
+                key="sonnet_mode"
+            )
+
+            focus_areas = st.text_input(
+                "Focus Areas (Optional)",
+                placeholder="e.g., revenue, risks, compliance",
+                help="Comma-separated areas to focus on",
+                key="sonnet_focus"
+            )
+
+        # File size and format validation
+        if sonnet_uploaded_file:
+            file_size_mb = sonnet_uploaded_file.size / (1024 * 1024)
+
+            if file_size_mb > 10:
+                st.error(f"❌ File too large: {file_size_mb:.1f}MB (max: 10MB)")
+            else:
+                st.info(f"📄 **{sonnet_uploaded_file.name}** ({file_size_mb:.1f}MB) - Ready for AI processing")
+
+                # Processing options info
+                st.markdown("**🔍 AI Processing Details:**")
+                col_info1, col_info2, col_info3 = st.columns(3)
+
+                with col_info1:
+                    st.write("**Engine:** Claude Sonnet")
+                    st.write("**Method:** Multimodal AI")
+
+                with col_info2:
+                    st.write("**Quality:** High precision")
+                    st.write("**Speed:** ~30-60 seconds")
+
+                with col_info3:
+                    st.write("**Formats:** All supported")
+                    st.write("**Images:** OCR + Understanding")
+
+                # Process button
+                if st.button("🧠 Process with AI (Sonnet)", type="primary", use_container_width=True, key="sonnet_process"):
+                    if file_size_mb <= 10:
+                        with st.spinner("🤖 Claude Sonnet is analyzing your document... This may take 30-60 seconds..."):
+
+                            # Show processing steps
+                            progress_container = st.container()
+                            with progress_container:
+                                step_progress = st.empty()
+                                step_progress.info("🔍 **Step 1/4:** Uploading document to Sonnet...")
+                                time.sleep(2)
+
+                                step_progress.info("📖 **Step 2/4:** AI is reading and understanding content...")
+                                time.sleep(3)
+
+                                step_progress.info("✂️ **Step 3/4:** Extracting and structuring text...")
+                                time.sleep(2)
+
+                                step_progress.info("🧩 **Step 4/4:** Creating RAG chunks...")
+
+                                # Process with Sonnet
+                                result = upload_document_with_sonnet_fallback(
+                                    file=sonnet_uploaded_file,
+                                    document_name=sonnet_document_name,
+                                    processing_mode=processing_mode,
+                                    focus_areas=focus_areas if focus_areas else None
+                                )
+
+                                step_progress.empty()
+
+                            if result:
+                                st.success(f"🎉 **AI Processing Successful!**")
+
+                                # Show detailed results
+                                col_result1, col_result2, col_result3 = st.columns(3)
+
+                                with col_result1:
+                                    st.metric("Chunks Created", result.get('chunks_created', 0))
+
+                                with col_result2:
+                                    text_length = result.get('extracted_text_length', 0)
+                                    st.metric("Text Extracted", f"{text_length:,} chars")
+
+                                with col_result3:
+                                    st.metric("Processing Method", "Sonnet AI")
+
+                                # Success message with details
+                                st.markdown(f"""
+                                **📊 Processing Results:**
+                                - **Document ID:** `{result.get('document_id', 'Unknown')}`
+                                - **Chunks Generated:** {result.get('chunks_created', 0)}
+                                - **Text Length:** {result.get('extracted_text_length', 0):,} characters
+                                - **Processing Mode:** {processing_mode.title()}
+                                - **Status:** Ready for RAG queries
+
+                                ✅ Your document has been successfully processed with Claude Sonnet and is now available in the RAG system!
+                                """)
+
+                                time.sleep(2)
+                                st.rerun()  # Refresh to show new document
+
+                            else:
+                                st.error("❌ **AI Processing Failed**")
+                                st.write("The AI processing encountered an error. Please try:")
+                                st.write("• Checking if the document is readable")
+                                st.write("• Reducing file size if possible")
+                                st.write("• Using a different format (PDF → image)")
+                                st.write("• Contacting support if issues persist")
+                    else:
+                        st.error("❌ Please select a file under 10MB")
+
+        # Help section
+        st.markdown("---")
+        st.markdown("**💡 Tips for Best Results:**")
+        col_tip1, col_tip2 = st.columns(2)
+
+        with col_tip1:
+            st.write("**For Financial Documents:**")
+            st.write("• Use 'financial' processing mode")
+            st.write("• Focus areas: revenue, profit, cash flow")
+            st.write("• PDF format preferred")
+
+        with col_tip2:
+            st.write("**For Scanned Documents:**")
+            st.write("• Use 'comprehensive' mode")
+            st.write("• High-resolution images work better")
+            st.write("• Clean, clear text is essential")
+
+    st.markdown("---")
+
     # Public Company Document Fetching Section
     st.header("🏢 Public Company Document Fetching")
     st.write("Automatically fetch SEC EDGAR filings and international regulatory documents for public companies.")
@@ -503,8 +692,11 @@ def show_upload_page():
                                     chunk_content = chunk.get("content", "No content")
                                     chunk_metadata = chunk.get("metadata", {})
 
-                                    # Display chunk info
-                                    with st.expander(f"📄 Sample {i+1}: {chunk_type.title()} Chunk", expanded=True):
+                                    # Display chunk info in a bordered container instead of expander
+                                    st.markdown(f"**📄 Sample {i+1}: {chunk_type.title()} Chunk**")
+
+                                    # Create a bordered container using markdown
+                                    with st.container():
                                         # Show metadata if available
                                         if chunk_metadata:
                                             metadata_col, content_col = st.columns([1, 2])
@@ -520,13 +712,17 @@ def show_upload_page():
                                                 display_content = chunk_content
                                                 if len(display_content) > 500:
                                                     display_content = display_content[:500] + "..."
-                                                st.text_area("", value=display_content, height=150, disabled=True)
+                                                st.text_area("", value=display_content, height=150, disabled=True, key=f"chunk_content_{doc_id}_{i}")
                                         else:
                                             st.markdown("**📝 Content:**")
                                             display_content = chunk_content
                                             if len(display_content) > 500:
                                                 display_content = display_content[:500] + "..."
-                                            st.text_area("", value=display_content, height=150, disabled=True)
+                                            st.text_area("", value=display_content, height=150, disabled=True, key=f"chunk_content_{doc_id}_{i}")
+
+                                    # Add visual separator
+                                    if i < len(chunks_data["chunks"]) - 1:
+                                        st.markdown("---")
                             else:
                                 st.warning("❌ Unable to load chunk samples. This might indicate processing issues.")
                         else:
