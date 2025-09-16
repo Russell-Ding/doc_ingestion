@@ -127,7 +127,7 @@ class PublicDocumentFetcher:
             for filing in filings[:10]:  # Limit to 10 documents
                 try:
                     doc_result = await self._download_and_process_sec_document(
-                        filing, ticker_symbol, auto_process
+                        filing, ticker_symbol, auto_process, cik
                     )
                     if doc_result:
                         processed_documents.append(doc_result)
@@ -244,15 +244,17 @@ class PublicDocumentFetcher:
         self,
         filing: Dict[str, Any],
         ticker_symbol: str,
-        auto_process: bool
+        auto_process: bool,
+        cik: str
     ) -> Optional[Dict[str, Any]]:
         """Download and optionally process SEC document"""
         try:
             accession_number = filing["accession_number"].replace("-", "")
             primary_document = filing["primary_document"]
 
-            # SEC document URL
-            doc_url = f"https://www.sec.gov/Archives/edgar/data/{accession_number[:10]}/{filing['accession_number']}/{primary_document}"
+            # SEC document URL - use CIK for the data path (remove leading zeros for URL)
+            cik_for_url = str(int(cik))  # Remove leading zeros for URL path
+            doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
 
             # Download document
             async with self.session.get(doc_url, headers=self.headers) as response:
