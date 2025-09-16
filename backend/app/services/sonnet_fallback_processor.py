@@ -172,34 +172,106 @@ class SonnetFallbackProcessor:
             if mime_type.startswith('image/') or file_extension == '.pdf':
                 # For images AND PDFs, use vision capabilities
                 if file_extension == '.pdf':
-                    # Convert PDF to image first
+                    # Convert ALL pages of PDF to images and process each
                     try:
                         import fitz  # PyMuPDF
-                        # Open PDF and get first page as image
                         pdf_doc = fitz.open(str(file_path))
-                        page = pdf_doc[0]  # Get first page
-                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
-                        img_data = pix.tobytes("png")
-                        file_base64 = base64.b64encode(img_data).decode('utf-8')
+                        total_pages = len(pdf_doc)
+
+                        logger.info("Processing multi-page PDF", file_path=str(file_path), total_pages=total_pages)
+
+                        # Process all pages (with reasonable limit to avoid overloading)
+                        max_pages = min(total_pages, 20)  # Limit to 20 pages for performance
+                        if total_pages > max_pages:
+                            logger.warning("PDF has many pages, processing first 20 only",
+                                         total_pages=total_pages, processing_pages=max_pages)
+
+                        all_extracted_text = []
+
+                        for page_num in range(max_pages):
+                            try:
+                                logger.info("Processing PDF page", page_num=page_num + 1, total=max_pages)
+
+                                # Convert page to image
+                                page = pdf_doc[page_num]
+                                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
+                                img_data = pix.tobytes("png")
+                                page_base64 = base64.b64encode(img_data).decode('utf-8')
+
+                                # Create page-specific prompt
+                                page_prompt = f"""
+{prompt}
+
+This is page {page_num + 1} of {max_pages} from a PDF document ({file_path.name}).
+Please extract all text content from this page while maintaining structure and context.
+
+Focus on:
+1. Preserving section headers and titles
+2. Maintaining paragraph structure
+3. Including all numerical data and tables
+4. Noting page references when relevant
+"""
+
+                                # Process page with Sonnet
+                                response = await bedrock_service.analyze_document_image(
+                                    image_base64=page_base64,
+                                    prompt=page_prompt,
+                                    max_tokens=4000
+                                )
+
+                                if response and response.get("extracted_text"):
+                                    page_text = response["extracted_text"]
+                                    # Add page marker
+                                    page_text_with_marker = f"\n\n--- PAGE {page_num + 1} ---\n\n{page_text}"
+                                    all_extracted_text.append(page_text_with_marker)
+                                    logger.info("Successfully processed PDF page",
+                                              page_num=page_num + 1,
+                                              text_length=len(page_text))
+                                else:
+                                    logger.warning("Empty response for PDF page", page_num=page_num + 1)
+                                    all_extracted_text.append(f"\n\n--- PAGE {page_num + 1} ---\n\n[No text extracted from this page]")
+
+                                # Small delay to avoid rate limiting
+                                await asyncio.sleep(0.5)
+
+                            except Exception as page_error:
+                                logger.error("Failed to process PDF page",
+                                           page_num=page_num + 1,
+                                           error=str(page_error))
+                                all_extracted_text.append(f"\n\n--- PAGE {page_num + 1} ---\n\n[Error processing this page: {str(page_error)}]")
+                                continue
+
                         pdf_doc.close()
 
-                        logger.info("Converted PDF to image for Sonnet processing", file_path=str(file_path))
+                        # Combine all pages into final extracted text
+                        extracted_text = "\n\n".join(all_extracted_text)
+
+                        if total_pages > max_pages:
+                            extracted_text += f"\n\n--- NOTE ---\nThis PDF contained {total_pages} pages. Only the first {max_pages} pages were processed due to performance limits."
+
+                        logger.info("Completed multi-page PDF processing",
+                                  file_path=str(file_path),
+                                  pages_processed=len(all_extracted_text),
+                                  total_text_length=len(extracted_text))
+
                     except Exception as e:
-                        logger.error("Failed to convert PDF to image", error=str(e))
-                        extracted_text = f"❌ Failed to convert PDF to image: {str(e)}"
+                        logger.error("Failed to convert PDF pages to images", error=str(e))
+                        extracted_text = f"❌ Failed to convert PDF to images: {str(e)}"
                         return extracted_text
 
-                response = await bedrock_service.analyze_document_image(
-                    image_base64=file_base64,
-                    prompt=prompt,
-                    max_tokens=4000
-                )
-                # Extract the text from the vision response
-                if response and response.get("extracted_text"):
-                    extracted_text = response["extracted_text"]
                 else:
-                    logger.warning("Sonnet vision returned empty response", file_path=str(file_path))
-                    return ""
+                    # Single image processing
+                    response = await bedrock_service.analyze_document_image(
+                        image_base64=file_base64,
+                        prompt=prompt,
+                        max_tokens=4000
+                    )
+                    # Extract the text from the vision response
+                    if response and response.get("extracted_text"):
+                        extracted_text = response["extracted_text"]
+                    else:
+                        logger.warning("Sonnet vision returned empty response", file_path=str(file_path))
+                        return ""
             elif file_extension == '.txt':
                 # For text files, read directly and enhance with AI
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:

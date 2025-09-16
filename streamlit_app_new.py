@@ -323,11 +323,17 @@ def show_upload_page():
     with st.expander("🚀 Ultimate AI Fallback Processing", expanded=False):
         st.markdown("""
         **🌟 Excellent for:**
-        - 📄 **PDF files** (auto-converted to images for AI processing)
+        - 📄 **Multi-page PDF files** (all pages auto-converted to images for AI processing)
         - 📷 Scanned document images (photos of pages)
         - 🖼️ Screenshots of documents or reports
         - 📋 Images with text, tables, or charts
         - 📄 Plain text files needing AI enhancement
+
+        **📋 PDF Processing:**
+        - Processes up to 20 pages automatically
+        - Each page converted to high-quality image
+        - Page markers added for reference
+        - Maintains document structure across pages
 
         **⚠️ Limited support:**
         - Word documents (save as PDF first)
@@ -394,7 +400,7 @@ def show_upload_page():
 
                 with col_info2:
                     st.write("**Quality:** High precision")
-                    st.write("**Speed:** ~30-60 seconds")
+                    st.write("**Speed:** ~30-60 sec/page")
 
                 with col_info3:
                     st.write("**Formats:** All supported")
@@ -403,7 +409,7 @@ def show_upload_page():
                 # Process button
                 if st.button("🧠 Process with AI (Sonnet)", type="primary", use_container_width=True, key="sonnet_process"):
                     if file_size_mb <= 10:
-                        with st.spinner("🤖 Claude Sonnet is analyzing your document... This may take 30-60 seconds..."):
+                        with st.spinner("🤖 Claude Sonnet is analyzing your document... Multi-page PDFs may take several minutes..."):
 
                             # Show processing steps
                             progress_container = st.container()
@@ -412,8 +418,8 @@ def show_upload_page():
                                 step_progress.info("🔍 **Step 1/4:** Uploading document to Sonnet...")
                                 time.sleep(2)
 
-                                step_progress.info("📖 **Step 2/4:** AI is reading and understanding content...")
-                                time.sleep(3)
+                                step_progress.info("📖 **Step 2/4:** AI is reading and understanding content (processing each page)...")
+                                time.sleep(5)
 
                                 step_progress.info("✂️ **Step 3/4:** Extracting and structuring text...")
                                 time.sleep(2)
