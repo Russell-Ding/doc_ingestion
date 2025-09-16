@@ -57,6 +57,31 @@ def get_documents():
     except:
         return []
 
+def get_document_chunks(document_id, limit=2):
+    """Get chunks for a specific document"""
+    try:
+        response = requests.get(f"{API_BASE_URL}/documents/{document_id}/chunks", params={"limit": limit})
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Failed to get document chunks: {str(e)}")
+        return None
+
+def fetch_public_company_documents(ticker_symbol, exchange, quarter=None, year=None, filing_types=None):
+    """Fetch public company documents from SEC EDGAR or international equivalents"""
+    try:
+        data = {
+            "ticker_symbol": ticker_symbol,
+            "exchange": exchange,
+            "quarter": quarter,
+            "year": year,
+            "filing_types": filing_types or []
+        }
+        response = requests.post(f"{API_BASE_URL}/documents/fetch-public", json=data)
+        return response.json() if response.status_code == 200 else None
+    except Exception as e:
+        st.error(f"Failed to fetch public company documents: {str(e)}")
+        return None
+
 def generate_segment_content(segment_data, selected_document_ids=None):
     """Generate content for a segment using the report coordinator"""
     try:
@@ -269,7 +294,152 @@ def show_upload_page():
             
             status_text.text("Processing complete!")
             st.rerun()  # Refresh to show new documents
-    
+
+    # Separator
+    st.markdown("---")
+
+    # Public Company Document Fetching Section
+    st.header("🏢 Public Company Document Fetching")
+    st.write("Automatically fetch SEC EDGAR filings and international regulatory documents for public companies.")
+
+    with st.expander("📊 Fetch Public Company Documents", expanded=False):
+        col1, col2 = st.columns([2, 1])
+
+        with col1:
+            # Ticker symbol input
+            ticker_symbol = st.text_input(
+                "🔤 Ticker Symbol / Security Identifier",
+                placeholder="e.g., AAPL, TSLA, MSFT",
+                help="Enter the company's ticker symbol or security identifier"
+            )
+
+            # Exchange selection
+            exchange = st.selectbox(
+                "🌍 Exchange",
+                options=["US", "UK", "EU", "Canada"],
+                help="Select the main exchange where the company is traded"
+            )
+
+        with col2:
+            # Year and quarter selection
+            current_year = time.strftime("%Y")
+            year = st.selectbox(
+                "📅 Year",
+                options=[str(y) for y in range(int(current_year), int(current_year) - 5, -1)],
+                help="Select the reporting year"
+            )
+
+            if exchange == "US":
+                quarter = st.selectbox(
+                    "📊 Quarter (Optional)",
+                    options=["", "Q1", "Q2", "Q3", "Q4"],
+                    help="Leave empty for annual reports, select quarter for 10-Q filings"
+                )
+            else:
+                quarter = st.selectbox(
+                    "📊 Period",
+                    options=["Annual", "Half-Year", "Q1", "Q2", "Q3", "Q4"],
+                    help="Select the reporting period"
+                )
+
+        # Filing type selection
+        if exchange == "US":
+            st.markdown("📋 **SEC Filing Types to Fetch:**")
+            col_10k, col_10q, col_8k, col_proxy = st.columns(4)
+
+            with col_10k:
+                fetch_10k = st.checkbox("10-K (Annual)", value=True, help="Annual report")
+            with col_10q:
+                fetch_10q = st.checkbox("10-Q (Quarterly)", value=True, help="Quarterly report")
+            with col_8k:
+                fetch_8k = st.checkbox("8-K (Current)", help="Current report")
+            with col_proxy:
+                fetch_proxy = st.checkbox("DEF 14A (Proxy)", help="Proxy statement")
+        else:
+            st.markdown("📋 **Document Types to Fetch:**")
+            col_annual, col_interim, col_governance = st.columns(3)
+
+            with col_annual:
+                fetch_annual = st.checkbox("Annual Report", value=True)
+            with col_interim:
+                fetch_interim = st.checkbox("Interim Report", value=True)
+            with col_governance:
+                fetch_governance = st.checkbox("Governance Docs", help="Corporate governance documents")
+
+        # Additional options
+        st.markdown("⚙️ **Additional Options:**")
+        col_opt1, col_opt2 = st.columns(2)
+
+        with col_opt1:
+            include_exhibits = st.checkbox("Include Exhibits", help="Fetch document exhibits when available")
+        with col_opt2:
+            auto_process = st.checkbox("Auto-process for RAG", value=True, help="Automatically process documents for RAG system")
+
+        # Fetch button
+        if st.button("🚀 Fetch Public Company Documents", type="primary", use_container_width=True):
+            # Validation
+            if not ticker_symbol:
+                st.error("❌ Please enter a ticker symbol")
+            elif not ticker_symbol.replace("-", "").replace(".", "").isalnum():
+                st.error("❌ Invalid ticker symbol format")
+            else:
+                # Prepare filing types based on exchange
+                filing_types = []
+                if exchange == "US":
+                    if fetch_10k:
+                        filing_types.append("10-K")
+                    if fetch_10q:
+                        filing_types.append("10-Q")
+                    if fetch_8k:
+                        filing_types.append("8-K")
+                    if fetch_proxy:
+                        filing_types.append("DEF 14A")
+                else:
+                    if locals().get('fetch_annual', False):
+                        filing_types.append("Annual Report")
+                    if locals().get('fetch_interim', False):
+                        filing_types.append("Interim Report")
+                    if locals().get('fetch_governance', False):
+                        filing_types.append("Governance")
+
+                if not filing_types:
+                    st.error("❌ Please select at least one document type to fetch")
+                else:
+                    # Show progress
+                    with st.spinner(f"🔍 Fetching documents for {ticker_symbol.upper()} ({exchange})..."):
+                        result = fetch_public_company_documents(
+                            ticker_symbol=ticker_symbol.upper(),
+                            exchange=exchange,
+                            quarter=quarter if quarter else None,
+                            year=int(year),
+                            filing_types=filing_types
+                        )
+
+                    if result:
+                        if result.get("success"):
+                            documents_found = result.get("documents", [])
+                            st.success(f"✅ Successfully fetched {len(documents_found)} document(s) for {ticker_symbol.upper()}")
+
+                            # Show summary of fetched documents
+                            if documents_found:
+                                st.markdown("📄 **Fetched Documents:**")
+                                for doc in documents_found:
+                                    st.write(f"• **{doc.get('filing_type', 'Unknown')}** - {doc.get('title', 'Untitled')} ({doc.get('date', 'Unknown date')})")
+
+                                if auto_process:
+                                    st.info("🔄 Documents are being automatically processed for RAG system...")
+                                    time.sleep(2)  # Give time for processing
+                                    st.rerun()  # Refresh to show new documents
+                            else:
+                                st.warning("⚠️ No documents found for the specified criteria")
+                        else:
+                            error_msg = result.get("error", "Unknown error occurred")
+                            st.error(f"❌ Failed to fetch documents: {error_msg}")
+                    else:
+                        st.error("❌ Failed to connect to document fetching service")
+
+    st.markdown("---")
+
     # Document library
     st.subheader("📚 Document Library")
     documents = get_documents()
@@ -301,8 +471,73 @@ def show_upload_page():
                 
                 with col2:
                     if st.button(f"🔍 View Details", key=f"view_{doc_id}", use_container_width=True):
-                        # You could expand this to show more details
-                        st.info(f"Document details for {doc_name}")
+                        # Store the document ID to show details
+                        st.session_state[f"show_details_{doc_id}"] = True
+                        st.rerun()
+
+                # Show document details including chunk samples
+                if st.session_state.get(f"show_details_{doc_id}", False):
+                    with st.container():
+                        st.markdown(f"### 📄 Details for {doc_name}")
+
+                        # Basic info
+                        col_info1, col_info2 = st.columns(2)
+                        with col_info1:
+                            st.write(f"**Document ID:** `{doc_id}`")
+                            st.write(f"**Total Chunks:** {chunk_count}")
+                        with col_info2:
+                            st.write(f"**Upload Date:** {upload_date}")
+                            st.write(f"**File Size:** {file_size / 1024:.1f} KB" if file_size > 0 else "**File Size:** Unknown")
+
+                        # Show chunk samples
+                        if chunk_count > 0:
+                            st.markdown("#### 📝 Random Chunk Samples")
+                            st.write("Here are 2 randomly selected chunks to help you understand the document content:")
+
+                            with st.spinner("Loading chunk samples..."):
+                                chunks_data = get_document_chunks(doc_id, limit=2)
+
+                            if chunks_data and chunks_data.get("chunks"):
+                                for i, chunk in enumerate(chunks_data["chunks"]):
+                                    chunk_type = chunk.get("type", "unknown")
+                                    chunk_content = chunk.get("content", "No content")
+                                    chunk_metadata = chunk.get("metadata", {})
+
+                                    # Display chunk info
+                                    with st.expander(f"📄 Sample {i+1}: {chunk_type.title()} Chunk", expanded=True):
+                                        # Show metadata if available
+                                        if chunk_metadata:
+                                            metadata_col, content_col = st.columns([1, 2])
+                                            with metadata_col:
+                                                st.markdown("**📋 Metadata:**")
+                                                for key, value in chunk_metadata.items():
+                                                    if key not in ['embedding']:  # Skip embeddings
+                                                        st.write(f"**{key.title()}:** {value}")
+
+                                            with content_col:
+                                                st.markdown("**📝 Content:**")
+                                                # Truncate content if too long
+                                                display_content = chunk_content
+                                                if len(display_content) > 500:
+                                                    display_content = display_content[:500] + "..."
+                                                st.text_area("", value=display_content, height=150, disabled=True)
+                                        else:
+                                            st.markdown("**📝 Content:**")
+                                            display_content = chunk_content
+                                            if len(display_content) > 500:
+                                                display_content = display_content[:500] + "..."
+                                            st.text_area("", value=display_content, height=150, disabled=True)
+                            else:
+                                st.warning("❌ Unable to load chunk samples. This might indicate processing issues.")
+                        else:
+                            st.warning("⚠️ This document has no chunks available for preview.")
+
+                        # Close button
+                        if st.button("❌ Close Details", key=f"close_details_{doc_id}"):
+                            st.session_state[f"show_details_{doc_id}"] = False
+                            st.rerun()
+
+                        st.markdown("---")
                 
                 with col3:
                     if st.button(f"🗑️ Delete", key=f"delete_{doc_id}", type="secondary", use_container_width=True):

@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.services.document_processor import document_processor
 from app.services.rag_system import rag_system
+from app.services.public_document_fetcher import public_document_fetcher
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -223,24 +224,95 @@ async def delete_document(
 @router.get("/{document_id}/chunks")
 async def get_document_chunks(
     document_id: str,
-    chunk_type: Optional[str] = None,
-    page_number: Optional[int] = None,
+    limit: Optional[int] = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Get chunks for a specific document"""
-    
+
     try:
-        # This would typically query the database for chunks
-        # For now, return placeholder
-        return {
-            "document_id": document_id,
-            "chunks": [],
-            "filters": {
-                "chunk_type": chunk_type,
-                "page_number": page_number
-            }
-        }
-        
+        # Get chunks from RAG system
+        result = await rag_system.get_document_chunks(document_id, limit)
+
+        if not result["chunks"] and result["total_chunks"] == 0:
+            # Check if document exists
+            doc_summary = await rag_system.get_document_summary(document_id)
+            if not doc_summary:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+        return result
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to get document chunks", error=str(e), document_id=document_id)
         raise HTTPException(status_code=500, detail="Failed to retrieve document chunks")
+
+
+@router.post("/fetch-public")
+async def fetch_public_company_documents(
+    request: Dict[str, Any],
+    db: AsyncSession = Depends(get_db)
+):
+    """Fetch public company documents from SEC EDGAR or international sources"""
+
+    try:
+        # Extract request parameters
+        ticker_symbol = request.get("ticker_symbol")
+        exchange = request.get("exchange")
+        quarter = request.get("quarter")
+        year = request.get("year")
+        filing_types = request.get("filing_types", [])
+        include_exhibits = request.get("include_exhibits", False)
+        auto_process = request.get("auto_process", True)
+
+        # Validate required parameters
+        if not ticker_symbol:
+            raise HTTPException(status_code=400, detail="Ticker symbol is required")
+        if not exchange:
+            raise HTTPException(status_code=400, detail="Exchange is required")
+        if not year:
+            raise HTTPException(status_code=400, detail="Year is required")
+        if not filing_types:
+            raise HTTPException(status_code=400, detail="At least one filing type is required")
+
+        logger.info(
+            "Public document fetch request",
+            ticker=ticker_symbol,
+            exchange=exchange,
+            quarter=quarter,
+            year=year,
+            filing_types=filing_types
+        )
+
+        # Use async context manager for the fetcher
+        async with public_document_fetcher as fetcher:
+            result = await fetcher.fetch_public_company_documents(
+                ticker_symbol=ticker_symbol,
+                exchange=exchange,
+                quarter=quarter,
+                year=year,
+                filing_types=filing_types,
+                include_exhibits=include_exhibits,
+                auto_process=auto_process
+            )
+
+        if result.get("success"):
+            logger.info(
+                "Public documents fetched successfully",
+                ticker=ticker_symbol,
+                documents_count=len(result.get("documents", []))
+            )
+        else:
+            logger.warning(
+                "Public document fetch failed",
+                ticker=ticker_symbol,
+                error=result.get("error")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Public document fetch endpoint failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to fetch public documents: {str(e)}")

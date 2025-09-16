@@ -1009,7 +1009,79 @@ JSON format:
         except Exception as e:
             logger.error("Failed to get document summary", error=str(e))
             return None
-    
+
+    async def get_document_chunks(self, document_id: str, limit: Optional[int] = None) -> Dict[str, Any]:
+        """Get all chunks for a specific document"""
+
+        if not self._initialized:
+            await self.initialize()
+
+        try:
+            # Get all text chunks for this document
+            text_chunks = self.text_collection.get(
+                where={"document_id": document_id}
+            )
+
+            # Get all table chunks for this document
+            table_chunks = self.table_collection.get(
+                where={"document_id": document_id}
+            )
+
+            # Format text chunks
+            formatted_text_chunks = []
+            for i, chunk_id in enumerate(text_chunks['ids']):
+                formatted_text_chunks.append({
+                    "id": chunk_id,
+                    "type": "text",
+                    "content": text_chunks['documents'][i],
+                    "metadata": text_chunks['metadatas'][i]
+                })
+
+            # Format table chunks
+            formatted_table_chunks = []
+            for i, chunk_id in enumerate(table_chunks['ids']):
+                formatted_table_chunks.append({
+                    "id": chunk_id,
+                    "type": "table",
+                    "content": table_chunks['documents'][i],
+                    "metadata": table_chunks['metadatas'][i]
+                })
+
+            # Combine all chunks
+            all_chunks = formatted_text_chunks + formatted_table_chunks
+
+            # Apply limit if specified
+            if limit and len(all_chunks) > limit:
+                # Randomly sample chunks if we have more than the limit
+                import random
+                all_chunks = random.sample(all_chunks, limit)
+
+            logger.info(
+                "Retrieved document chunks",
+                document_id=document_id,
+                text_chunks=len(formatted_text_chunks),
+                table_chunks=len(formatted_table_chunks),
+                total_returned=len(all_chunks)
+            )
+
+            return {
+                "document_id": document_id,
+                "chunks": all_chunks,
+                "total_text_chunks": len(formatted_text_chunks),
+                "total_table_chunks": len(formatted_table_chunks),
+                "total_chunks": len(all_chunks)
+            }
+
+        except Exception as e:
+            logger.error("Failed to get document chunks", error=str(e), document_id=document_id)
+            return {
+                "document_id": document_id,
+                "chunks": [],
+                "total_text_chunks": 0,
+                "total_table_chunks": 0,
+                "total_chunks": 0
+            }
+
     async def delete_document(self, document_id: str):
         """Remove all chunks for a document from the RAG system"""
         
