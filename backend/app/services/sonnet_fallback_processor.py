@@ -389,7 +389,7 @@ Separate different sections with clear breaks.
         document_id: str,
         document_name: str
     ) -> List[DocumentChunk]:
-        """Create document chunks from extracted text"""
+        """Create document chunks from extracted text with embeddings"""
 
         chunks = []
 
@@ -441,6 +441,34 @@ Separate different sections with clear breaks.
                 table_data=None
             )
             chunks.append(chunk)
+
+        # Generate embeddings for all chunks
+        logger.info("Generating embeddings for Sonnet chunks", chunk_count=len(chunks))
+
+        if chunks:
+            try:
+                # Prepare text content for embedding generation
+                chunk_texts = [chunk.content for chunk in chunks]
+
+                # Generate embeddings using bedrock service
+                embeddings = await bedrock_service.generate_embeddings(chunk_texts)
+
+                # Assign embeddings to chunks
+                for i, chunk in enumerate(chunks):
+                    if i < len(embeddings):
+                        chunk.embeddings = embeddings[i]
+                    else:
+                        logger.warning("Missing embedding for chunk", chunk_index=i)
+                        # Provide empty embedding with correct dimension
+                        chunk.embeddings = [0.0] * settings.BEDROCK_EMBEDDING_DIMENSION
+
+                logger.info("Successfully generated embeddings for all chunks", chunk_count=len(chunks))
+
+            except Exception as e:
+                logger.error("Failed to generate embeddings for Sonnet chunks", error=str(e))
+                # Fallback: provide empty embeddings with correct dimension
+                for chunk in chunks:
+                    chunk.embeddings = [0.0] * settings.BEDROCK_EMBEDDING_DIMENSION
 
         return chunks
 
