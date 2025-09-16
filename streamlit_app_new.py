@@ -322,15 +322,15 @@ def show_upload_page():
 
     with st.expander("🚀 Ultimate AI Fallback Processing", expanded=False):
         st.markdown("""
-        **🌟 Perfect for:**
+        **🌟 Excellent for:**
+        - 📄 **PDF files** (auto-converted to images for AI processing)
         - 📷 Scanned document images (photos of pages)
         - 🖼️ Screenshots of documents or reports
         - 📋 Images with text, tables, or charts
         - 📄 Plain text files needing AI enhancement
 
         **⚠️ Limited support:**
-        - PDF files (provides guidance on conversion)
-        - Word documents (suggests alternative approaches)
+        - Word documents (save as PDF first)
         """)
 
         col1, col2 = st.columns([3, 1])
@@ -340,7 +340,7 @@ def show_upload_page():
             sonnet_uploaded_file = st.file_uploader(
                 "Select document for AI processing",
                 type=['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'txt', 'pdf'],
-                help="🌟 BEST: Images (JPG, PNG) | Good: Text files | Limited: PDF (guidance only)",
+                help="🌟 EXCELLENT: Images (JPG, PNG) & PDFs | Good: Text files",
                 key="sonnet_uploader"
             )
 

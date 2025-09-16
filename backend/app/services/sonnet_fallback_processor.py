@@ -165,9 +165,30 @@ class SonnetFallbackProcessor:
             # Build prompt based on processing options
             prompt = self._build_sonnet_prompt(processing_mode, focus_areas, file_path.suffix.lower())
 
-            # Call Sonnet via Bedrock
-            if mime_type.startswith('image/'):
-                # For images, use vision capabilities directly
+            # Get file extension
+            file_extension = file_path.suffix.lower()
+
+            # Call Sonnet via Bedrock - handle PDFs as images now!
+            if mime_type.startswith('image/') or file_extension == '.pdf':
+                # For images AND PDFs, use vision capabilities
+                if file_extension == '.pdf':
+                    # Convert PDF to image first
+                    try:
+                        import fitz  # PyMuPDF
+                        # Open PDF and get first page as image
+                        pdf_doc = fitz.open(str(file_path))
+                        page = pdf_doc[0]  # Get first page
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
+                        img_data = pix.tobytes("png")
+                        file_base64 = base64.b64encode(img_data).decode('utf-8')
+                        pdf_doc.close()
+
+                        logger.info("Converted PDF to image for Sonnet processing", file_path=str(file_path))
+                    except Exception as e:
+                        logger.error("Failed to convert PDF to image", error=str(e))
+                        extracted_text = f"❌ Failed to convert PDF to image: {str(e)}"
+                        return extracted_text
+
                 response = await bedrock_service.analyze_document_image(
                     image_base64=file_base64,
                     prompt=prompt,
@@ -217,20 +238,19 @@ Focus on:
 The file "{file_path.name}" ({file_extension}) cannot be directly processed by Claude Sonnet via the API.
 
 **Recommended approaches:**
-1. **For PDFs**: Convert to high-quality images (PNG/JPG) and re-upload
-2. **For Word docs**: Export as PDF, then convert to images
-3. **For best results**: Use the regular document upload feature instead
+1. **For Word docs**: Export as PDF, then use this tool again
+2. **For best results**: Use the regular document upload feature instead
 
 **What Sonnet Fallback works best with:**
 - 📷 Images of documents (JPG, PNG, etc.)
+- 📄 PDF files (converted to images automatically)
 - 📄 Plain text files
 - 📋 Screenshots of document pages
 
 **Current file**: {file_extension} format
-**Size**: {len(file_content)} bytes
 **MIME type**: {mime_type}
 
-Try converting this document to an image format for optimal AI processing!
+For Word documents, try: Save As → PDF → Upload again with Sonnet fallback!
 """
 
             # Clean and format extracted text
@@ -392,19 +412,12 @@ Separate different sections with clear breaks.
                 # Create chunk from current content
                 if current_chunk:
                     chunk = DocumentChunk(
-                        id=f"{document_id}_sonnet_chunk_{chunk_index}",
-                        document_id=document_id,
                         content=current_chunk.strip(),
-                        chunk_type="text",
+                        chunk_index=chunk_index,
                         page_number=None,  # Sonnet extraction doesn't preserve page numbers
                         section_title=self._extract_section_title(current_chunk),
-                        table_data=None,
-                        metadata={
-                            "processing_method": "sonnet_fallback",
-                            "chunk_index": chunk_index,
-                            "character_count": len(current_chunk),
-                            "extracted_with_ai": True
-                        }
+                        chunk_type="text",
+                        table_data=None
                     )
                     chunks.append(chunk)
                     chunk_index += 1
@@ -420,19 +433,12 @@ Separate different sections with clear breaks.
         # Add final chunk
         if current_chunk:
             chunk = DocumentChunk(
-                id=f"{document_id}_sonnet_chunk_{chunk_index}",
-                document_id=document_id,
                 content=current_chunk.strip(),
-                chunk_type="text",
+                chunk_index=chunk_index,
                 page_number=None,
                 section_title=self._extract_section_title(current_chunk),
-                table_data=None,
-                metadata={
-                    "processing_method": "sonnet_fallback",
-                    "chunk_index": chunk_index,
-                    "character_count": len(current_chunk),
-                    "extracted_with_ai": True
-                }
+                chunk_type="text",
+                table_data=None
             )
             chunks.append(chunk)
 
