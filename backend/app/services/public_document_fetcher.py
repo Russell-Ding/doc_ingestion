@@ -11,6 +11,7 @@ import uuid
 import os
 from bs4 import BeautifulSoup
 import re
+import aiofiles
 try:
     from sec_edgar_downloader import Downloader
     SEC_EDGAR_AVAILABLE = True
@@ -244,31 +245,155 @@ class PublicDocumentFetcher:
                 # Find all downloaded files
                 for file_path in base_path.glob("**/*.txt"):
                     if self._matches_date_criteria(str(file_path), year, quarter):
+                        # Clean the file before processing if it's XML/XBRL
+                        cleaned_file_path = await self._clean_edgar_file(str(file_path))
                         doc_result = await self._process_downloaded_file(
-                            str(file_path), ticker_symbol, filing_type, auto_process
+                            cleaned_file_path, ticker_symbol, filing_type, auto_process
                         )
                         if doc_result:
                             processed_documents.append(doc_result)
                             logger.info("Processed SEC filing",
                                       file_path=str(file_path),
+                                      cleaned_path=cleaned_file_path,
                                       filing_type=filing_type)
 
                 # Also check for HTML files
                 for file_path in base_path.glob("**/*.htm*"):
                     if self._matches_date_criteria(str(file_path), year, quarter):
+                        # Clean the file before processing if it's XML/XBRL
+                        cleaned_file_path = await self._clean_edgar_file(str(file_path))
                         doc_result = await self._process_downloaded_file(
-                            str(file_path), ticker_symbol, filing_type, auto_process
+                            cleaned_file_path, ticker_symbol, filing_type, auto_process
                         )
                         if doc_result:
                             processed_documents.append(doc_result)
                             logger.info("Processed SEC filing",
                                       file_path=str(file_path),
+                                      cleaned_path=cleaned_file_path,
                                       filing_type=filing_type)
             else:
                 logger.warning("Download directory not found", path=str(base_path))
 
         except Exception as e:
             logger.error("Error processing downloaded filings", error=str(e))
+
+    async def _clean_edgar_file(self, file_path: str) -> str:
+        """Clean EDGAR XML/XBRL files to extract readable content"""
+        try:
+            path_obj = Path(file_path)
+
+            # Read the original file
+            async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = await f.read()
+
+            # Check if it's XML/XBRL content
+            if self._is_xml_content(content):
+                logger.info(f"Cleaning XML/XBRL content from {file_path}")
+                cleaned_content = self._extract_text_from_xbrl(content)
+            else:
+                logger.info(f"File appears to be plain text, minimal cleaning: {file_path}")
+                cleaned_content = self._clean_plain_text(content)
+
+            # Create cleaned file
+            cleaned_file_path = str(path_obj.parent / f"{path_obj.stem}_cleaned.txt")
+            async with aiofiles.open(cleaned_file_path, 'w', encoding='utf-8') as f:
+                await f.write(cleaned_content)
+
+            logger.info(f"Cleaned file saved: {cleaned_file_path}")
+            return cleaned_file_path
+
+        except Exception as e:
+            logger.warning(f"Failed to clean EDGAR file {file_path}, using original: {str(e)}")
+            return file_path
+
+    def _is_xml_content(self, content: str) -> bool:
+        """Check if content is XML/XBRL format"""
+        content_start = content[:1000].lower()
+        return any(marker in content_start for marker in [
+            '<?xml', '<xbrl', '<html', 'xmlns:', '<sec-document'
+        ])
+
+    def _extract_text_from_xbrl(self, content: str) -> str:
+        """Extract readable text from XBRL/XML content"""
+        try:
+            # Use BeautifulSoup to parse XML/HTML
+            soup = BeautifulSoup(content, 'html.parser')
+
+            # Remove script, style, and metadata elements
+            for element in soup(['script', 'style', 'meta', 'link', 'title']):
+                element.decompose()
+
+            # Remove XBRL-specific elements that don't contain useful text
+            xbrl_noise_tags = [
+                'xbrl', 'context', 'unit', 'schemaref', 'linkbaseref',
+                'roleref', 'arcroleref', 'footnotelink', 'loc', 'footnote'
+            ]
+            for tag in xbrl_noise_tags:
+                for element in soup.find_all(tag):
+                    element.decompose()
+
+            # Extract text content
+            text = soup.get_text()
+
+            # Clean up the text
+            return self._clean_extracted_text(text)
+
+        except Exception as e:
+            logger.warning(f"Failed to parse XML/XBRL, trying simple text extraction: {str(e)}")
+            # Fallback: simple regex-based cleaning
+            return self._simple_xml_clean(content)
+
+    def _simple_xml_clean(self, content: str) -> str:
+        """Simple regex-based XML cleaning as fallback"""
+        import re
+
+        # Remove XML tags
+        content = re.sub(r'<[^>]+>', ' ', content)
+
+        # Remove XML declarations and processing instructions
+        content = re.sub(r'<\?[^>]*\?>', '', content)
+
+        # Remove CDATA sections
+        content = re.sub(r'<!\[CDATA\[.*?\]\]>', '', content, flags=re.DOTALL)
+
+        # Clean up the text
+        return self._clean_extracted_text(content)
+
+    def _clean_extracted_text(self, text: str) -> str:
+        """Clean and normalize extracted text"""
+        import re
+
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+
+        # Remove excessive blank lines
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+
+        # Remove very short lines (likely noise)
+        lines = text.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            line = line.strip()
+            if len(line) > 3:  # Keep lines with more than 3 characters
+                cleaned_lines.append(line)
+
+        # Remove duplicate consecutive lines
+        final_lines = []
+        prev_line = None
+        for line in cleaned_lines:
+            if line != prev_line:
+                final_lines.append(line)
+                prev_line = line
+
+        return '\n'.join(final_lines).strip()
+
+    def _clean_plain_text(self, content: str) -> str:
+        """Light cleaning for plain text files"""
+        # Just normalize whitespace and remove excessive blank lines
+        import re
+        content = re.sub(r'\s+', ' ', content)
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+        return content.strip()
 
     async def _process_downloaded_file(
         self,
