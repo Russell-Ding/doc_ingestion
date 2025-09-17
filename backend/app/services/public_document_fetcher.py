@@ -159,8 +159,9 @@ class PublicDocumentFetcher:
         try:
             # SEC Company Tickers JSON endpoint
             url = "https://www.sec.gov/files/company_tickers.json"
+            headers = {**self.base_headers, 'Host': 'www.sec.gov'}
 
-            async with self.session.get(url, headers=self.headers) as response:
+            async with self.session.get(url, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
 
@@ -190,18 +191,31 @@ class PublicDocumentFetcher:
     ) -> List[Dict[str, Any]]:
         """Search for SEC filings"""
         try:
-            # SEC EDGAR API endpoint
-            url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+            # SEC EDGAR API endpoint - CIK needs to be padded to 10 digits
+            padded_cik = cik.zfill(10)
+            url = f"https://data.sec.gov/submissions/CIK{padded_cik}.json"
 
-            async with self.session.get(url, headers=self.headers) as response:
+            logger.info("Searching SEC filings", url=url, cik=cik, padded_cik=padded_cik)
+
+            # Add delay to respect SEC rate limits
+            await asyncio.sleep(0.1)
+            headers = {**self.base_headers, 'Host': 'data.sec.gov'}
+
+            async with self.session.get(url, headers=headers) as response:
                 if response.status == 200:
                     data = await response.json()
                     filings = data.get("filings", {}).get("recent", {})
 
-                    # Filter filings by type and date
-                    filtered_filings = []
+                    # Debug: Log what we got from SEC
                     forms = filings.get("form", [])
                     filing_dates = filings.get("filingDate", [])
+                    logger.info("SEC response received",
+                              total_forms=len(forms),
+                              recent_forms=forms[:10] if forms else [],
+                              recent_dates=filing_dates[:10] if filing_dates else [])
+
+                    # Filter filings by type and date
+                    filtered_filings = []
                     accession_numbers = filings.get("accessionNumber", [])
                     primary_documents = filings.get("primaryDocument", [])
 
@@ -209,18 +223,24 @@ class PublicDocumentFetcher:
                         if form in filing_types:
                             filing_date = filing_dates[i] if i < len(filing_dates) else None
                             if filing_date and str(year) in filing_date:
+                                logger.info("Found matching filing",
+                                          form=form,
+                                          filing_date=filing_date,
+                                          quarter_requested=quarter)
+
+                                # TODO: Re-enable quarter filtering after debugging
                                 # Additional quarter filtering for 10-Q
-                                if quarter and form == "10-Q":
-                                    # This is a simplified quarter matching - you might want to enhance this
-                                    filing_month = int(filing_date.split("-")[1])
-                                    quarter_months = {
-                                        "Q1": [3, 4, 5],
-                                        "Q2": [6, 7, 8],
-                                        "Q3": [9, 10, 11],
-                                        "Q4": [12, 1, 2]
-                                    }
-                                    if filing_month not in quarter_months.get(quarter, []):
-                                        continue
+                                # if quarter and form == "10-Q":
+                                #     # This is a simplified quarter matching - you might want to enhance this
+                                #     filing_month = int(filing_date.split("-")[1])
+                                #     quarter_months = {
+                                #         "Q1": [3, 4, 5],
+                                #         "Q2": [6, 7, 8],
+                                #         "Q3": [9, 10, 11],
+                                #         "Q4": [12, 1, 2]
+                                #     }
+                                #     if filing_month not in quarter_months.get(quarter, []):
+                                #         continue
 
                                 filtered_filings.append({
                                     "form": form,
@@ -233,7 +253,11 @@ class PublicDocumentFetcher:
                     return filtered_filings[:10]  # Return top 10 most recent
 
                 else:
-                    logger.error("Failed to search SEC filings", status=response.status)
+                    response_text = await response.text()
+                    logger.error("Failed to search SEC filings",
+                               status=response.status,
+                               url=url,
+                               response_preview=response_text[:500] if response_text else "No content")
                     return []
 
         except Exception as e:
@@ -252,81 +276,141 @@ class PublicDocumentFetcher:
             accession_number = filing["accession_number"].replace("-", "")
             primary_document = filing["primary_document"]
 
-            # SEC document URL - use CIK for the data path (remove leading zeros for URL)
+            # SEC document URL - try different URL patterns
             cik_for_url = str(int(cik))  # Remove leading zeros for URL path
-            doc_url = f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
 
-            # Download document
-            async with self.session.get(doc_url, headers=self.headers) as response:
-                if response.status == 200:
-                    content = await response.read()
+            # Use SEC EDGAR data API for modern document access
+            doc_api_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik.zfill(10)}.json"
 
-                    # Create temporary file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as temp_file:
-                        temp_file.write(content)
-                        temp_file_path = temp_file.name
+            # Try multiple URL approaches for document download
+            url_attempts = [
+                # Modern SEC data URL
+                f"https://data.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}",
+                # Traditional SEC archives URL
+                f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}",
+                # SEC ix viewer for HTML documents
+                f"https://www.sec.gov/ix?doc=/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
+            ]
 
-                    document_info = {
-                        "filing_type": filing["form"],
-                        "title": f"{ticker_symbol} {filing['form']} Filing",
-                        "date": filing["filing_date"],
-                        "url": doc_url,
-                        "file_path": temp_file_path,
-                        "file_size": len(content)
-                    }
+            response = None
+            successful_url = None
 
-                    # Auto-process for RAG if requested
-                    if auto_process:
-                        try:
-                            # Generate unique document ID
-                            document_id = str(uuid.uuid4())
-                            document_name = f"{ticker_symbol}_{filing['form']}_{filing['filing_date']}"
+            for i, doc_url in enumerate(url_attempts):
+                try:
+                    # Adjust headers based on URL
+                    if 'data.sec.gov' in doc_url:
+                        headers = {**self.base_headers, 'Host': 'data.sec.gov'}
+                    else:
+                        headers = {**self.base_headers, 'Host': 'www.sec.gov'}
 
-                            # Process document
-                            chunks = await document_processor.process_document(
-                                file_path=temp_file_path,
-                                document_name=document_name,
-                                document_id=document_id
-                            )
+                    logger.info(f"Trying URL approach {i+1}", url=doc_url)
 
-                            # Add to RAG system
-                            await rag_system.add_document_chunks(
-                                chunks=chunks,
-                                document_id=document_id,
-                                document_name=document_name,
-                                file_size=len(content)
-                            )
-
-                            document_info.update({
-                                "document_id": document_id,
-                                "processed": True,
-                                "chunks_created": len(chunks)
-                            })
-
-                            logger.info("SEC document processed for RAG",
-                                      document_id=document_id,
-                                      chunks=len(chunks))
-
-                        except Exception as e:
-                            logger.error("Failed to process SEC document for RAG", error=str(e))
-                            document_info.update({
-                                "processed": False,
-                                "error": str(e)
-                            })
-                        finally:
-                            # Clean up temporary file
+                    async with self.session.get(doc_url, headers=headers) as doc_response:
+                        if doc_response.status == 200:
                             try:
-                                os.unlink(temp_file_path)
-                            except:
-                                pass
+                                # Read content while response is open
+                                if '/ix?' in doc_url:
+                                    # For ix viewer, get text content (HTML)
+                                    content = await doc_response.text()
+                                    content = content.encode('utf-8')  # Convert to bytes for consistency
+                                    logger.info("Downloaded ix viewer content", url=doc_url, size=len(content))
+                                else:
+                                    # For direct documents, get binary content
+                                    content = await doc_response.read()
+                                    logger.info("Downloaded document content", url=doc_url, size=len(content))
 
-                    return document_info
+                                successful_url = doc_url
+                                response = doc_response  # Keep reference for status
+                                break
 
+                            except Exception as e:
+                                logger.warning("Failed to read response content", error=str(e))
+                                continue
+                        else:
+                            logger.warning(f"URL approach {i+1} failed",
+                                         status=doc_response.status, url=doc_url)
+
+                except Exception as e:
+                    logger.warning(f"URL approach {i+1} error", url=doc_url, error=str(e))
+                    continue
+
+            # Check if we successfully downloaded content
+            if response and response.status == 200 and 'content' in locals():
+
+                # Determine file extension based on content type
+                if '/ix?' in successful_url or primary_document.endswith(('.htm', '.html')):
+                    file_suffix = ".html"
+                elif primary_document.endswith('.xml'):
+                    file_suffix = ".xml"
                 else:
-                    logger.warning("Failed to download SEC document",
-                                 url=doc_url,
-                                 status=response.status)
-                    return None
+                    file_suffix = ".html"  # Default to HTML for SEC documents
+
+                # Create temporary file with correct extension
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as temp_file:
+                    temp_file.write(content)
+                    temp_file_path = temp_file.name
+
+                document_info = {
+                    "filing_type": filing["form"],
+                    "title": f"{ticker_symbol} {filing['form']} Filing",
+                    "date": filing["filing_date"],
+                    "url": successful_url or "unknown",
+                    "file_path": temp_file_path,
+                    "file_size": len(content)
+                }
+
+                # Auto-process for RAG if requested
+                if auto_process:
+                    try:
+                        # Generate unique document ID
+                        document_id = str(uuid.uuid4())
+                        document_name = f"{ticker_symbol}_{filing['form']}_{filing['filing_date']}"
+
+                        # Process document
+                        chunks = await document_processor.process_document(
+                            file_path=temp_file_path,
+                            document_name=document_name,
+                            document_id=document_id
+                        )
+
+                        # Add to RAG system
+                        await rag_system.add_document_chunks(
+                            chunks=chunks,
+                            document_id=document_id,
+                            document_name=document_name,
+                            file_size=len(content)
+                        )
+
+                        document_info.update({
+                            "document_id": document_id,
+                            "processed": True,
+                            "chunks_created": len(chunks)
+                        })
+
+                        logger.info("SEC document processed for RAG",
+                                  document_id=document_id,
+                                  chunks=len(chunks))
+
+                    except Exception as e:
+                        logger.error("Failed to process SEC document for RAG", error=str(e))
+                        document_info.update({
+                            "processed": False,
+                            "error": str(e)
+                        })
+                    finally:
+                        # Clean up temporary file
+                        try:
+                            os.unlink(temp_file_path)
+                        except:
+                            pass
+
+                return document_info
+
+            else:
+                logger.warning("Failed to download SEC document",
+                             primary_document=primary_document,
+                             filing_accession=filing['accession_number'])
+                return None
 
         except Exception as e:
             logger.error("Error downloading SEC document", error=str(e))
@@ -380,3 +464,17 @@ class PublicDocumentFetcher:
 
 # Global instance
 public_document_fetcher = PublicDocumentFetcher()
+
+if __name__ == "__main__":
+    async def test_fetch():
+        async with public_document_fetcher:
+            result = await public_document_fetcher.fetch_public_company_documents(
+                ticker_symbol="AAPL",
+                exchange="US",
+                quarter=None,
+                year=2024,
+                filing_types=["10-K"]
+            )
+            print(result)
+
+    asyncio.run(test_fetch())

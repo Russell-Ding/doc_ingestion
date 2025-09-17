@@ -9,6 +9,7 @@ from PIL import Image
 import pdfplumber
 import fitz  # PyMuPDF for better PDF image extraction
 from docx import Document
+from bs4 import BeautifulSoup
 import structlog
 from datetime import datetime
 import json
@@ -61,7 +62,9 @@ class DocumentProcessor:
             '.xls': self._process_excel,
             '.jpg': self._process_image,
             '.jpeg': self._process_image,
-            '.png': self._process_image
+            '.png': self._process_image,
+            '.html': self._process_html,
+            '.htm': self._process_html
         }
     
     async def process_document(
@@ -968,6 +971,68 @@ class DocumentProcessor:
         except Exception as e:
             logger.warning(f"Image preprocessing failed, using original: {str(e)}")
             return image
+
+    async def _process_html(
+        self,
+        file_path: str,
+        document_name: str,
+        document_id: str
+    ) -> List[DocumentChunk]:
+        """Process HTML files (including SEC EDGAR documents)"""
+        chunks = []
+
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                html_content = await f.read()
+
+            # Parse HTML with BeautifulSoup
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Remove script and style elements
+            for script_or_style in soup(["script", "style"]):
+                script_or_style.decompose()
+
+            # Extract text content
+            text_content = soup.get_text()
+
+            # Clean up text - remove excessive whitespace
+            lines = (line.strip() for line in text_content.splitlines())
+            text_content = '\n'.join(line for line in lines if line)
+
+            if not text_content.strip():
+                logger.warning("No text content extracted from HTML", file_path=file_path)
+                return chunks
+
+            # Split into chunks
+            text_chunks = self._split_text(text_content)
+
+            # Create DocumentChunk objects
+            for i, chunk_text in enumerate(text_chunks):
+                if chunk_text.strip():
+                    chunk = DocumentChunk(
+                        content=chunk_text,
+                        chunk_index=i,
+                        chunk_type="text",
+                        section_title=f"HTML Section {i+1}"
+                    )
+                    chunks.append(chunk)
+
+            logger.info(
+                "HTML processing completed",
+                document_id=document_id,
+                chunk_count=len(chunks),
+                total_chars=len(text_content)
+            )
+
+        except Exception as e:
+            logger.error(
+                "HTML processing failed",
+                document_id=document_id,
+                error=str(e)
+            )
+            raise
+
+        return chunks
 
 
 # Global document processor instance
