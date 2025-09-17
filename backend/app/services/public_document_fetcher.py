@@ -283,13 +283,25 @@ class PublicDocumentFetcher:
             doc_api_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik.zfill(10)}.json"
 
             # Try multiple URL approaches for document download
+            # First, try to get the filing details to find the actual document URLs
+            filing_detail_url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
+
+            # For modern XBRL documents, we need to find alternative document formats
+            # Try different document formats and access methods
+            accession_clean = filing['accession_number'].replace('-', '')
+            base_url = f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}"
+
             url_attempts = [
-                # Modern SEC data URL
-                f"https://data.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}",
-                # Traditional SEC archives URL
-                f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}",
-                # SEC ix viewer for HTML documents
-                f"https://www.sec.gov/ix?doc=/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
+                # Try direct HTML document
+                f"{base_url}/{primary_document}",
+                # Try plain text version (usually exists for 10-K, 10-Q)
+                f"{base_url}/{primary_document.replace('.htm', '.txt')}",
+                # Try alternative filename patterns
+                f"{base_url}/{filing['accession_number']}.txt",
+                f"{base_url}/d{accession_clean}.htm",
+                f"{base_url}/d{accession_clean}.txt",
+                # Try CloudFront CDN
+                f"https://d18rn0p25nwr6d.cloudfront.net/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
             ]
 
             response = None
@@ -337,8 +349,10 @@ class PublicDocumentFetcher:
             # Check if we successfully downloaded content
             if response and response.status == 200 and 'content' in locals():
 
-                # Determine file extension based on content type
-                if '/ix?' in successful_url or primary_document.endswith(('.htm', '.html')):
+                # Determine file extension based on content type and URL
+                if '.txt' in successful_url:
+                    file_suffix = ".txt"
+                elif '/ix?' in successful_url or primary_document.endswith(('.htm', '.html')):
                     file_suffix = ".html"
                 elif primary_document.endswith('.xml'):
                     file_suffix = ".xml"

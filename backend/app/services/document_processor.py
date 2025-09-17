@@ -64,7 +64,8 @@ class DocumentProcessor:
             '.jpeg': self._process_image,
             '.png': self._process_image,
             '.html': self._process_html,
-            '.htm': self._process_html
+            '.htm': self._process_html,
+            '.txt': self._process_text
         }
     
     async def process_document(
@@ -1027,6 +1028,57 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(
                 "HTML processing failed",
+                document_id=document_id,
+                error=str(e)
+            )
+            raise
+
+        return chunks
+
+    async def _process_text(
+        self,
+        file_path: str,
+        document_name: str,
+        document_id: str
+    ) -> List[DocumentChunk]:
+        """Process plain text files (including SEC EDGAR text filings)"""
+        chunks = []
+
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                text_content = await f.read()
+
+            if not text_content.strip():
+                logger.warning("No text content found in file", file_path=file_path)
+                return chunks
+
+            # Clean up text - normalize whitespace but preserve structure
+            text_content = text_content.strip()
+
+            # Split into chunks
+            text_chunks = self._split_text(text_content)
+
+            # Create DocumentChunk objects
+            for i, chunk_text in enumerate(text_chunks):
+                if chunk_text.strip():
+                    chunk = DocumentChunk(
+                        content=chunk_text,
+                        chunk_index=i,
+                        chunk_type="text",
+                        section_title=f"Text Section {i+1}"
+                    )
+                    chunks.append(chunk)
+
+            logger.info(
+                "Text processing completed",
+                document_id=document_id,
+                chunk_count=len(chunks),
+                total_chars=len(text_content)
+            )
+
+        except Exception as e:
+            logger.error(
+                "Text processing failed",
                 document_id=document_id,
                 error=str(e)
             )
