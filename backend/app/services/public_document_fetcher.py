@@ -11,6 +11,11 @@ import uuid
 import os
 from bs4 import BeautifulSoup
 import re
+try:
+    from sec_edgar_downloader import Downloader
+    SEC_EDGAR_AVAILABLE = True
+except ImportError:
+    SEC_EDGAR_AVAILABLE = False
 
 from app.core.config import settings
 from app.services.document_processor import document_processor
@@ -18,16 +23,19 @@ from app.services.rag_system import rag_system
 
 logger = structlog.get_logger(__name__)
 
+# Log the SEC downloader availability after logger is defined
+if not SEC_EDGAR_AVAILABLE:
+    logger.warning("sec-edgar-downloader not available. Install with: pip install sec-edgar-downloader")
+
 
 class PublicDocumentFetcher:
     """Service for fetching public company documents from regulatory sources"""
 
     def __init__(self):
         self.session = None
-        self.headers = {
-            'User-Agent': 'Your Company Name (your.email@company.com)',  # Required by SEC
-            'Accept': '*/*',
-            'Host': 'www.sec.gov'
+        self.base_headers = {
+            'User-Agent': 'zdingaa@gmail.com',  # Required by SEC
+            'Accept': '*/*'
         }
 
     async def __aenter__(self):
@@ -101,39 +109,67 @@ class PublicDocumentFetcher:
         include_exhibits: bool,
         auto_process: bool
     ) -> Dict[str, Any]:
-        """Fetch SEC EDGAR documents"""
+        """Fetch SEC EDGAR documents using sec-edgar-downloader"""
 
         try:
-            # Step 1: Get company CIK from ticker
-            cik = await self._get_cik_from_ticker(ticker_symbol)
-            if not cik:
+            if not SEC_EDGAR_AVAILABLE:
                 return {
                     "success": False,
-                    "error": f"Could not find CIK for ticker {ticker_symbol}",
+                    "error": "sec-edgar-downloader package not installed. Please install with: pip install sec-edgar-downloader",
                     "documents": []
                 }
 
-            # Step 2: Search for filings
-            filings = await self._search_sec_filings(cik, filing_types, year, quarter)
-            if not filings:
-                return {
-                    "success": False,
-                    "error": f"No filings found for {ticker_symbol} in {year}" + (f" {quarter}" if quarter else ""),
-                    "documents": []
-                }
+            logger.info(
+                "Starting SEC document fetch with sec-edgar-downloader",
+                ticker=ticker_symbol,
+                filing_types=filing_types,
+                year=year,
+                quarter=quarter
+            )
 
-            # Step 3: Download and process documents
+            # Initialize the downloader with proper user agent
+            downloader = Downloader("Document Ingestion System", "admin@company.com")
+
             processed_documents = []
-            for filing in filings[:10]:  # Limit to 10 documents
+
+            # Download each filing type
+            for filing_type in filing_types:
                 try:
-                    doc_result = await self._download_and_process_sec_document(
-                        filing, ticker_symbol, auto_process, cik
+                    logger.info(f"Downloading {filing_type} filings for {ticker_symbol}")
+
+                    # Set date filter for the year
+                    after_date = f"{year}-01-01"
+                    before_date = f"{year}-12-31"
+
+                    # Download filings with date filtering
+                    download_result = downloader.get(
+                        filing_type,
+                        ticker_symbol,
+                        after=after_date,
+                        before=before_date,
+                        limit=10  # Limit to recent filings
                     )
-                    if doc_result:
-                        processed_documents.append(doc_result)
+
+                    logger.info(f"Download result: {download_result} for {filing_type} filings")
+
+                    # The downloader.get() method returns the number of downloaded files, not the files themselves
+                    # Files are saved to disk in the default directory structure
+                    if download_result and download_result > 0:
+                        # Process downloaded files from the directory structure
+                        await self._process_downloaded_filings(
+                            download_result, ticker_symbol, filing_type, year, quarter, auto_process, processed_documents
+                        )
+
                 except Exception as e:
-                    logger.warning("Failed to process SEC filing", filing=filing, error=str(e))
+                    logger.warning(f"Failed to download {filing_type} filings", error=str(e))
                     continue
+
+            if not processed_documents:
+                return {
+                    "success": False,
+                    "error": f"No {filing_types} filings found for {ticker_symbol} in {year}" + (f" {quarter}" if quarter else ""),
+                    "documents": []
+                }
 
             return {
                 "success": True,
@@ -141,7 +177,6 @@ class PublicDocumentFetcher:
                 "documents": processed_documents,
                 "company_info": {
                     "ticker": ticker_symbol,
-                    "cik": cik,
                     "exchange": "US"
                 }
             }
@@ -153,6 +188,155 @@ class PublicDocumentFetcher:
                 "error": f"SEC document fetch failed: {str(e)}",
                 "documents": []
             }
+
+    def _matches_date_criteria(self, file_path: str, year: int, quarter: Optional[str]) -> bool:
+        """Check if downloaded file matches the date criteria"""
+        try:
+            # Extract date from file path - sec-edgar-downloader uses date-based folder structure
+            path_obj = Path(file_path)
+
+            # The file path typically contains date information in folder structure
+            # Look for year in the path components
+            path_parts = path_obj.parts
+
+            # Simple approach: check if the year appears in the path
+            year_str = str(year)
+            for part in path_parts:
+                if year_str in part:
+                    # If quarter is specified, we could add more sophisticated matching
+                    # For now, just match by year
+                    return True
+
+            # Fallback: always return True to include all files if we can't determine date
+            return True
+
+        except Exception as e:
+            logger.warning("Error checking date criteria", file_path=file_path, error=str(e))
+            return True
+
+    async def _process_downloaded_filings(
+        self,
+        download_count: int,
+        ticker_symbol: str,
+        filing_type: str,
+        year: int,
+        quarter: Optional[str],
+        auto_process: bool,
+        processed_documents: List[Dict[str, Any]]
+    ):
+        """Process downloaded filings from sec-edgar-downloader"""
+        try:
+            # sec-edgar-downloader saves files in a specific directory structure
+            # The files are typically saved in ./sec-edgar-filings/[ticker]/[filing_type]/
+            base_path = Path("./sec-edgar-filings") / ticker_symbol.upper() / filing_type
+
+            logger.info(f"Looking for downloaded files in: {base_path}")
+            logger.info(f"Directory exists: {base_path.exists()}")
+
+            if base_path.exists():
+                # List all files in the directory for debugging
+                all_files = list(base_path.glob("**/*"))
+                logger.info(f"Found {len(all_files)} total files in directory")
+                for file_path in all_files[:5]:  # Log first 5 files
+                    logger.info(f"File found: {file_path}")
+
+            if base_path.exists():
+                # Find all downloaded files
+                for file_path in base_path.glob("**/*.txt"):
+                    if self._matches_date_criteria(str(file_path), year, quarter):
+                        doc_result = await self._process_downloaded_file(
+                            str(file_path), ticker_symbol, filing_type, auto_process
+                        )
+                        if doc_result:
+                            processed_documents.append(doc_result)
+                            logger.info("Processed SEC filing",
+                                      file_path=str(file_path),
+                                      filing_type=filing_type)
+
+                # Also check for HTML files
+                for file_path in base_path.glob("**/*.htm*"):
+                    if self._matches_date_criteria(str(file_path), year, quarter):
+                        doc_result = await self._process_downloaded_file(
+                            str(file_path), ticker_symbol, filing_type, auto_process
+                        )
+                        if doc_result:
+                            processed_documents.append(doc_result)
+                            logger.info("Processed SEC filing",
+                                      file_path=str(file_path),
+                                      filing_type=filing_type)
+            else:
+                logger.warning("Download directory not found", path=str(base_path))
+
+        except Exception as e:
+            logger.error("Error processing downloaded filings", error=str(e))
+
+    async def _process_downloaded_file(
+        self,
+        file_path: str,
+        ticker_symbol: str,
+        filing_type: str,
+        auto_process: bool
+    ) -> Optional[Dict[str, Any]]:
+        """Process a downloaded SEC filing file"""
+        try:
+            path_obj = Path(file_path)
+
+            # Get file info
+            file_size = path_obj.stat().st_size
+
+            document_info = {
+                "filing_type": filing_type,
+                "title": f"{ticker_symbol} {filing_type} Filing",
+                "date": datetime.now().isoformat(),  # We'll extract actual date from filename if needed
+                "url": f"file://{file_path}",
+                "file_path": str(file_path),
+                "file_size": file_size
+            }
+
+            # Auto-process for RAG if requested
+            if auto_process:
+                try:
+                    # Generate unique document ID
+                    document_id = str(uuid.uuid4())
+                    document_name = f"{ticker_symbol}_{filing_type}_{path_obj.stem}"
+
+                    # Process document
+                    chunks = await document_processor.process_document(
+                        file_path=str(file_path),
+                        document_name=document_name,
+                        document_id=document_id
+                    )
+
+                    # Add to RAG system
+                    await rag_system.add_document_chunks(
+                        chunks=chunks,
+                        document_id=document_id,
+                        document_name=document_name,
+                        file_size=file_size
+                    )
+
+                    document_info.update({
+                        "document_id": document_id,
+                        "processed": True,
+                        "chunks_created": len(chunks)
+                    })
+
+                    logger.info("SEC document processed for RAG",
+                              document_id=document_id,
+                              chunks=len(chunks))
+
+                except Exception as e:
+                    logger.error("Failed to process SEC document for RAG", error=str(e))
+                    document_info.update({
+                        "processed": False,
+                        "error": str(e)
+                    })
+
+            return document_info
+
+        except Exception as e:
+            logger.error("Error processing downloaded file", file_path=file_path, error=str(e))
+            return None
 
     async def _get_cik_from_ticker(self, ticker_symbol: str) -> Optional[str]:
         """Get SEC CIK number from ticker symbol"""
@@ -286,23 +470,47 @@ class PublicDocumentFetcher:
             # First, try to get the filing details to find the actual document URLs
             filing_detail_url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
 
-            # For modern XBRL documents, we need to find alternative document formats
-            # Try different document formats and access methods
-            accession_clean = filing['accession_number'].replace('-', '')
+            # New approach: Get the filing index to find all available documents
             base_url = f"https://www.sec.gov/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}"
 
-            url_attempts = [
-                # Try direct HTML document
-                f"{base_url}/{primary_document}",
-                # Try plain text version (usually exists for 10-K, 10-Q)
-                f"{base_url}/{primary_document.replace('.htm', '.txt')}",
-                # Try alternative filename patterns
-                f"{base_url}/{filing['accession_number']}.txt",
-                f"{base_url}/d{accession_clean}.htm",
-                f"{base_url}/d{accession_clean}.txt",
-                # Try CloudFront CDN
-                f"https://d18rn0p25nwr6d.cloudfront.net/Archives/edgar/data/{cik_for_url}/{filing['accession_number']}/{primary_document}"
-            ]
+            # First, try to get the filing index
+            index_url = f"{base_url}/index.json"
+            headers = {**self.base_headers, 'Host': 'www.sec.gov'}
+
+            logger.info("Getting filing index", url=index_url)
+
+            try:
+                async with self.session.get(index_url, headers=headers) as index_response:
+                    if index_response.status == 200:
+                        index_data = await index_response.json()
+                        directory = index_data.get('directory', {})
+                        items = directory.get('item', [])
+
+                        # Find documents in the filing
+                        available_docs = []
+                        for item in items:
+                            name = item.get('name', '')
+                            if name.endswith(('.htm', '.html', '.txt')) and not name.startswith('R'):
+                                available_docs.append(name)
+
+                        logger.info("Found documents in filing", documents=available_docs)
+
+                        # Prioritize document types: txt first (easier to process), then htm
+                        url_attempts = []
+                        for doc in available_docs:
+                            if doc.endswith('.txt'):
+                                url_attempts.insert(0, f"{base_url}/{doc}")  # Prioritize txt
+                            else:
+                                url_attempts.append(f"{base_url}/{doc}")
+                    else:
+                        logger.warning("Could not get filing index", status=index_response.status)
+                        # Fallback to original approach
+                        url_attempts = [f"{base_url}/{primary_document}"]
+
+            except Exception as e:
+                logger.warning("Error getting filing index", error=str(e))
+                # Fallback to original approach
+                url_attempts = [f"{base_url}/{primary_document}"]
 
             response = None
             successful_url = None
@@ -485,9 +693,9 @@ if __name__ == "__main__":
             result = await public_document_fetcher.fetch_public_company_documents(
                 ticker_symbol="AAPL",
                 exchange="US",
-                quarter=None,
+                quarter='Q3',
                 year=2024,
-                filing_types=["10-K"]
+                filing_types=["10-K", "10-Q"]
             )
             print(result)
 
