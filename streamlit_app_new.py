@@ -256,6 +256,218 @@ def create_basic_word_content(report):
 
         return content.encode('utf-8')
 
+def create_basic_word_content_with_comments(report, include_validation_comments=True):
+    """Create a Word document with validation comments using add_comment function"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        # Create new document
+        doc = Document()
+
+        # Add title
+        title = doc.add_heading(report['title'], 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add generation date
+        date_para = doc.add_paragraph(f"Generated on {report['generation_date']}")
+        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add page break
+        doc.add_page_break()
+
+        # Add sections with validation comments
+        for i, section in enumerate(report['sections']):
+            # Section heading
+            section_heading = doc.add_heading(f"{i+1}. {section['name']}", level=1)
+
+            # Section content
+            content = section.get('content', 'No content available')
+            validation_results = section.get('validation_results', {})
+
+            if include_validation_comments and validation_results:
+                # Add content with validation comments
+                add_content_with_validation_comments(doc, content, validation_results)
+            else:
+                # Add content without comments
+                paragraphs = content.split('\n\n')
+                for paragraph in paragraphs:
+                    if paragraph.strip():
+                        doc.add_paragraph(paragraph.strip())
+
+            # Add spacing
+            doc.add_paragraph()
+
+        # Save to BytesIO
+        from io import BytesIO
+        word_buffer = BytesIO()
+        doc.save(word_buffer)
+        word_buffer.seek(0)
+
+        return word_buffer.getvalue()
+
+    except ImportError:
+        # If python-docx is not available, create a simple text-based "Word" document
+        content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
+
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n"
+            section_content = section.get('content', 'No content available')
+            content += f"{section_content}\n\n"
+
+            # Add validation comments as text if enabled
+            if include_validation_comments:
+                validation_results = section.get('validation_results', {})
+                if validation_results and validation_results.get('issues'):
+                    content += "\n--- VALIDATION COMMENTS ---\n"
+                    for issue in validation_results.get('issues', []):
+                        severity = issue.get('severity', 'medium').upper()
+                        issue_type = issue.get('issue_type', 'Issue').title()
+                        description = issue.get('description', 'No description')
+                        content += f"[{severity} - {issue_type}] {description}\n"
+                    content += "--- END VALIDATION COMMENTS ---\n\n"
+
+            content += "-" * 50 + "\n\n"
+
+        return content.encode('utf-8')
+
+    except Exception as e:
+        # Ultimate fallback - just return text content with validation
+        content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
+
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n"
+            section_content = section.get('content', 'No content available')
+            content += f"{section_content}\n\n"
+
+        return content.encode('utf-8')
+
+def add_content_with_validation_comments(doc, content, validation_results):
+    """Add content to document with validation comments using add_comment function"""
+
+    # Split content into paragraphs
+    paragraphs = content.split('\n\n')
+
+    # Get validation issues
+    validation_issues = validation_results.get('issues', [])
+
+    for paragraph_text in paragraphs:
+        if paragraph_text.strip():
+            paragraph = doc.add_paragraph()
+
+            # Find validation issues that apply to this paragraph
+            paragraph_issues = []
+            for issue in validation_issues:
+                text_span = issue.get('text_span', '')
+                if text_span and text_span.strip() in paragraph_text:
+                    paragraph_issues.append(issue)
+
+            if paragraph_issues:
+                # Add paragraph text with highlighting and comments
+                add_paragraph_with_comments(paragraph, paragraph_text, paragraph_issues)
+            else:
+                # Add paragraph without comments
+                paragraph.add_run(paragraph_text)
+
+def add_paragraph_with_comments(paragraph, text, issues):
+    """Add paragraph text with validation comments"""
+
+    # For each issue, we'll add the text and then a comment
+    current_pos = 0
+
+    for issue in issues:
+        text_span = issue.get('text_span', '').strip()
+
+        if text_span and text_span in text:
+            # Find position of the text span
+            span_start = text.find(text_span, current_pos)
+            if span_start != -1:
+                span_end = span_start + len(text_span)
+
+                # Add text before the span
+                if span_start > current_pos:
+                    paragraph.add_run(text[current_pos:span_start])
+
+                # Add the span with highlighting
+                highlighted_run = paragraph.add_run(text_span)
+
+                # Apply highlighting based on severity
+                severity = issue.get('severity', 'medium')
+                if severity == 'high':
+                    # Red highlight for high severity
+                    highlighted_run.font.highlight_color = 2  # Red
+                elif severity == 'medium':
+                    # Yellow highlight for medium severity
+                    highlighted_run.font.highlight_color = 7  # Yellow
+                else:
+                    # Green highlight for low severity
+                    highlighted_run.font.highlight_color = 4  # Green
+
+                # Use your add_comment function here
+                try:
+                    comment_text = create_validation_comment_text(issue)
+                    add_comment(paragraph, highlighted_run, comment_text, issue.get('severity', 'medium'))
+                except Exception as comment_error:
+                    # Fallback: add comment as footnote text
+                    comment_run = paragraph.add_run(f" [VALIDATION: {comment_text}]")
+                    comment_run.font.size = Pt(8)
+                    comment_run.font.italic = True
+
+                current_pos = span_end
+
+    # Add remaining text
+    if current_pos < len(text):
+        paragraph.add_run(text[current_pos:])
+
+def create_validation_comment_text(issue):
+    """Create formatted comment text from validation issue"""
+    severity = issue.get('severity', 'medium').upper()
+    issue_type = issue.get('issue_type', 'Issue').title()
+    description = issue.get('description', 'No description available')
+    suggested_fix = issue.get('suggested_fix', '')
+    confidence = issue.get('confidence_score', 0.0)
+
+    comment_text = f"[{severity} - {issue_type}]\n{description}"
+
+    if suggested_fix:
+        comment_text += f"\n\nSuggested Fix: {suggested_fix}"
+
+    if confidence > 0:
+        comment_text += f"\n\nAI Confidence: {confidence:.1%}"
+
+    return comment_text
+
+def add_comment(paragraph, run, comment_text, severity):
+    """Add comment to Word document - placeholder for your custom function"""
+    # This is where you would integrate your custom add_comment function
+    # For now, this is a placeholder that adds inline comments
+
+    # Your custom add_comment function should be called here like:
+    # add_comment(paragraph, run, comment_text, severity)
+
+    # Placeholder implementation - replace with your actual function
+    try:
+        # If you have python-docx-template or custom commenting, use it here
+        # For now, we'll add a simple text annotation
+        from docx.shared import Pt
+
+        comment_run = paragraph.add_run(f" [💬 {comment_text}]")
+        comment_run.font.size = Pt(8)
+        comment_run.font.italic = True
+
+        # Color code by severity
+        if severity == 'high':
+            comment_run.font.color.rgb = (204, 0, 0)  # Red
+        elif severity == 'medium':
+            comment_run.font.color.rgb = (255, 102, 0)  # Orange
+        else:
+            comment_run.font.color.rgb = (0, 102, 204)  # Blue
+
+    except Exception as e:
+        # Ultimate fallback
+        pass
+
 @st.fragment
 def word_download_fragment(report):
     """Fragment for Word document download - prevents full page reload"""
@@ -457,6 +669,214 @@ def word_download_fragment(report):
             if hasattr(st.session_state, 'word_error_details'):
                 delattr(st.session_state, 'word_error_details')
             st.rerun()
+
+def word_download_section(report):
+    """Word document download section without fragment - fixes state issues"""
+    st.markdown("### 📄 Word Document")
+
+    include_validation_checked = st.checkbox("Include AI validation comments", value=True, key="word_validation_main")
+
+    # Initialize word preparation state
+    if 'word_preparation_state' not in st.session_state:
+        st.session_state.word_preparation_state = 'ready'  # ready, preparing, prepared, error
+        st.session_state.word_download_data = None
+        st.session_state.word_preparation_logs = []
+
+    # Debug logging function
+    def log_debug(message):
+        timestamp = time.strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        st.session_state.word_preparation_logs.append(log_entry)
+        print(f"DEBUG: {log_entry}")  # Console logging
+
+    # Show current status and controls based on state
+    if st.session_state.word_preparation_state == 'ready':
+        st.info("💡 Ready to prepare Word document")
+
+        # Show debug logs if any exist
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=False):
+                for log_entry in st.session_state.word_preparation_logs[-5:]:  # Show last 5 logs
+                    st.text(log_entry)
+
+        if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word_main"):
+            log_debug("User clicked Prepare Word Document button")
+            log_debug(f"Report data available: {report is not None}")
+            if report:
+                log_debug(f"Report title: {report.get('title', 'No title')}")
+                log_debug(f"Report sections: {len(report.get('sections', []))}")
+
+            # Immediately start preparation process (no state change + rerun)
+            st.session_state.word_preparation_state = 'preparing'
+
+            # Force immediate preparation
+            prepare_word_document_immediate(report, include_validation_checked, log_debug)
+
+    elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
+        # DOWNLOAD READY STATE - stays visible after clicking download
+        word_data = st.session_state.word_download_data
+        doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
+        file_size = len(word_data['content'])
+
+        st.success(f"✅ {doc_type} document ready!")
+        st.info(f"📄 {word_data['filename']} ({file_size/1024:.1f} KB)")
+
+        # Primary download button - PERSISTENT - NO RERUN
+        st.download_button(
+            label=f"📄 Download {doc_type} Document",
+            data=word_data['content'],
+            file_name=word_data['filename'],
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key="download_word_main",
+            help="Ready for download! Click multiple times if needed."
+        )
+
+        # Show debug logs
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=False):
+                for log_entry in st.session_state.word_preparation_logs[-10:]:  # Show last 10 logs
+                    st.text(log_entry)
+
+        # Option to prepare new document (smaller button)
+        if st.button("🔄 Prepare New", use_container_width=True, key="prepare_new_word_main"):
+            st.session_state.word_preparation_state = 'ready'
+            st.session_state.word_download_data = None
+            st.rerun()
+
+    elif st.session_state.word_preparation_state == 'error':
+        st.error("❌ Document preparation failed")
+
+        # Show error details if available
+        if hasattr(st.session_state, 'word_error_details'):
+            error_details = st.session_state.word_error_details
+            with st.expander("🔍 Error Details", expanded=True):
+                st.text("Advanced Export Error:")
+                st.code(error_details.get('advanced_error', 'Unknown error'))
+                st.text("Basic Export Error:")
+                st.code(error_details.get('basic_error', 'Unknown error'))
+
+        # Show debug logs
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=True):
+                for log_entry in st.session_state.word_preparation_logs:
+                    st.text(log_entry)
+
+        if st.button("🔄 Try Again", use_container_width=True, key="retry_word_main"):
+            st.session_state.word_preparation_state = 'ready'
+            st.session_state.word_download_data = None
+            if hasattr(st.session_state, 'word_error_details'):
+                delattr(st.session_state, 'word_error_details')
+            st.rerun()
+
+def prepare_word_document_immediate(report, include_validation_checked, log_debug):
+    """Immediately prepare word document without state transitions"""
+
+    if not report:
+        log_debug("ERROR: No report data available for Word generation!")
+        st.error("❌ No report data available for Word generation")
+        st.session_state.word_preparation_state = 'error'
+        st.session_state.word_error_details = {
+            'advanced_error': 'No report data available',
+            'basic_error': 'Report parameter is None'
+        }
+        return
+
+    # Show progress indicator
+    progress_placeholder = st.empty()
+    status_placeholder = st.empty()
+
+    with progress_placeholder.container():
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        log_debug("Starting Word document preparation")
+
+        try:
+            status_text.text("🔄 Step 1/4: Calling backend export service...")
+            progress_bar.progress(0.1)
+            log_debug("About to call create_report_and_export_word()")
+
+            # First try advanced export through backend
+            export_result = create_report_and_export_word(report, include_validation_checked)
+            log_debug(f"Export result received: {export_result}")
+
+            status_text.text("📡 Step 2/4: Processing backend response...")
+            progress_bar.progress(0.3)
+
+            if export_result and not export_result.get('error'):
+                download_url = export_result.get('download_url')
+                log_debug(f"Download URL: {download_url}")
+
+                if download_url:
+                    status_text.text("⬇️ Step 3/4: Downloading Word document...")
+                    progress_bar.progress(0.6)
+                    log_debug("About to call download_word_document()")
+
+                    # Download the file content
+                    word_content = download_word_document(download_url)
+                    log_debug(f"Downloaded content size: {len(word_content) if word_content else 'None'}")
+
+                    if word_content:
+                        status_text.text("✅ Step 4/4: Finalizing document...")
+                        progress_bar.progress(0.9)
+
+                        filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                        st.session_state.word_download_data = {
+                            'content': word_content,
+                            'filename': filename,
+                            'type': 'advanced'
+                        }
+                        st.session_state.word_preparation_state = 'prepared'
+                        log_debug(f"Advanced Word document prepared successfully: {filename}")
+
+                        status_text.text("✅ Document ready!")
+                        progress_bar.progress(1.0)
+                    else:
+                        raise Exception("Failed to download generated document")
+                else:
+                    raise Exception("No download URL provided")
+            else:
+                error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
+                raise Exception(f"Backend export failed: {error_msg}")
+
+        except Exception as e:
+            log_debug(f"Advanced export failed: {str(e)}")
+
+            # Fallback to basic Word document
+            try:
+                status_text.text("🔄 Fallback: Creating basic Word document...")
+                progress_bar.progress(0.7)
+                log_debug("Trying basic Word document generation")
+
+                basic_word_content = create_basic_word_content_with_comments(report, include_validation_checked)
+                log_debug(f"Basic content size: {len(basic_word_content) if basic_word_content else 'None'}")
+
+                st.session_state.word_download_data = {
+                    'content': basic_word_content,
+                    'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                    'type': 'basic'
+                }
+                st.session_state.word_preparation_state = 'prepared'
+                log_debug("Basic Word document prepared successfully")
+
+                status_text.text("✅ Basic document ready!")
+                progress_bar.progress(1.0)
+
+            except Exception as basic_error:
+                log_debug(f"Both advanced and basic document generation failed: {str(basic_error)}")
+                st.session_state.word_preparation_state = 'error'
+                st.session_state.word_error_details = {
+                    'advanced_error': str(e),
+                    'basic_error': str(basic_error)
+                }
+                status_text.text("❌ Document preparation failed")
+                progress_bar.progress(0)
+
+        # Clear progress after completion
+        time.sleep(2)
+        progress_placeholder.empty()
+        status_placeholder.empty()
 
 @st.fragment
 def text_download_fragment(report):
@@ -1562,8 +1982,8 @@ def show_generated_report(report):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Word Document Download Section using st.fragment - prevents full page reload
-        word_download_fragment(report)
+        # Word Document Download Section - Fixed approach without fragment issues
+        word_download_section(report)
     
     with col2:
         # Text Download Section using st.fragment - prevents full page reload
