@@ -118,56 +118,224 @@ def generate_segment_content(segment_data, selected_document_ids=None):
 def create_report_and_export_word(report_data, include_validation_comments=True):
     """Create a report and export as Word document"""
     try:
-        # First create a report record
-        report_response = requests.post(f"{API_BASE_URL}/reports/", json={
-            "title": report_data['title'],
-            "description": f"Generated report with {len(report_data['sections'])} sections"
-        })
-        
-        if report_response.status_code != 200:
-            return {"error": "Failed to create report record"}
-        
-        report_id = report_response.json()['id']
-        
-        # Create segments for the report
-        segment_ids = []
-        validation_results_list = []
-        
-        for i, section in enumerate(report_data['sections']):
-            # Get validation results for this section
-            validation_results = section.get('validation_results', {})
-            validation_results_list.append(validation_results)
-            
-            segment_data = {
-                "report_id": report_id,
-                "name": section['name'],
-                "description": f"Section {i+1}",
-                "prompt": f"Generated content for {section['name']}",
-                "order_index": i,
-                "required_document_types": [],
-                "generation_settings": {},
-                "generated_content": section['content'],
-                "content_status": "completed",
-                "validation_results": validation_results
-            }
-            
-            segment_response = requests.post(f"{API_BASE_URL}/segments/", json=segment_data)
-            if segment_response.status_code == 200:
-                segment_ids.append(segment_response.json()['id'])
-        
-        # Export as Word document
-        export_response = requests.post(
-            f"{API_BASE_URL}/reports/{report_id}/export/word",
-            params={"include_validations": include_validation_comments}
-        )
-        
-        if export_response.status_code == 200:
-            return export_response.json()
-        else:
-            return {"error": f"Export failed: {export_response.text}"}
-            
+        # First try the backend approach
+        try:
+            # Create a report record
+            report_response = requests.post(f"{API_BASE_URL}/reports/", json={
+                "title": report_data['title'],
+                "description": f"Generated report with {len(report_data['sections'])} sections"
+            }, timeout=10)
+
+            if report_response.status_code != 200:
+                raise Exception(f"Failed to create report record: {report_response.status_code}")
+
+            report_id = report_response.json()['id']
+
+            # Create segments for the report
+            segment_ids = []
+
+            for i, section in enumerate(report_data['sections']):
+                # Get validation results for this section
+                validation_results = section.get('validation_results', {})
+
+                segment_data = {
+                    "report_id": report_id,
+                    "name": section['name'],
+                    "description": f"Section {i+1}",
+                    "prompt": f"Generated content for {section['name']}",
+                    "order_index": i,
+                    "required_document_types": [],
+                    "generation_settings": {},
+                    "generated_content": section['content'],
+                    "content_status": "completed",
+                    "validation_results": validation_results
+                }
+
+                segment_response = requests.post(f"{API_BASE_URL}/segments/", json=segment_data, timeout=10)
+                if segment_response.status_code == 200:
+                    segment_ids.append(segment_response.json()['id'])
+                else:
+                    raise Exception(f"Failed to create segment: {segment_response.status_code}")
+
+            if not segment_ids:
+                raise Exception("No segments were created successfully")
+
+            # Export as Word document
+            export_response = requests.post(
+                f"{API_BASE_URL}/reports/{report_id}/export/word",
+                params={"include_validations": include_validation_comments},
+                timeout=30
+            )
+
+            if export_response.status_code == 200:
+                return export_response.json()
+            else:
+                raise Exception(f"Export failed: {export_response.status_code} - {export_response.text}")
+
+        except Exception as backend_error:
+            # If backend approach fails, log the error and try direct Word generation
+            st.warning(f"Backend export failed: {str(backend_error)}")
+            st.info("Attempting direct Word document generation...")
+
+            # Direct Word document generation using python-docx
+            return create_direct_word_document(report_data, include_validation_comments)
+
     except Exception as e:
         return {"error": str(e)}
+
+def create_direct_word_document(report_data, include_validation_comments=True):
+    """Create Word document directly using python-docx"""
+    try:
+        from docx import Document
+        from docx.shared import Inches, Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
+        from docx.enum.style import WD_STYLE_TYPE
+        from io import BytesIO
+        import uuid
+
+        # Create new document
+        doc = Document()
+
+        # Set up styles
+        styles = doc.styles
+
+        # Title style
+        if 'Report Title' not in [s.name for s in styles]:
+            title_style = styles.add_style('Report Title', WD_STYLE_TYPE.PARAGRAPH)
+            title_font = title_style.font
+            title_font.name = 'Arial'
+            title_font.size = Pt(18)
+            title_font.bold = True
+            title_font.color.rgb = RGBColor(0, 51, 102)
+            title_paragraph = title_style.paragraph_format
+            title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            title_paragraph.space_after = Pt(12)
+
+        # Section heading style
+        if 'Section Heading' not in [s.name for s in styles]:
+            heading_style = styles.add_style('Section Heading', WD_STYLE_TYPE.PARAGRAPH)
+            heading_font = heading_style.font
+            heading_font.name = 'Arial'
+            heading_font.size = Pt(14)
+            heading_font.bold = True
+            heading_font.color.rgb = RGBColor(0, 51, 102)
+            heading_paragraph = heading_style.paragraph_format
+            heading_paragraph.space_before = Pt(18)
+            heading_paragraph.space_after = Pt(6)
+
+        # Add title
+        title_paragraph = doc.add_paragraph()
+        title_paragraph.style = 'Report Title'
+        title_paragraph.add_run(report_data['title'])
+
+        # Add subtitle with date
+        subtitle = doc.add_paragraph()
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        subtitle_run = subtitle.add_run(f"Generated on {report_data['generation_date']}")
+        subtitle_run.font.size = Pt(12)
+        subtitle_run.font.italic = True
+
+        # Add page break
+        doc.add_page_break()
+
+        # Add sections
+        for i, section in enumerate(report_data['sections']):
+            # Section heading
+            heading = doc.add_paragraph()
+            heading.style = 'Section Heading'
+            heading.add_run(f"{i+1}. {section['name']}")
+
+            # Section content
+            content = section.get('content', '')
+            validation_data = section.get('validation_results', {})
+
+            if content:
+                # Split content into paragraphs
+                paragraphs = content.split('\n\n')
+
+                for paragraph_text in paragraphs:
+                    if paragraph_text.strip():
+                        paragraph = doc.add_paragraph()
+
+                        if include_validation_comments and validation_data:
+                            # Add content with validation comments
+                            add_content_with_validation(paragraph, paragraph_text, validation_data)
+                        else:
+                            paragraph.add_run(paragraph_text)
+            else:
+                placeholder = doc.add_paragraph()
+                placeholder.add_run('[No content available for this section]')
+                placeholder.runs[0].font.italic = True
+                placeholder.runs[0].font.color.rgb = RGBColor(128, 128, 128)
+
+            # Add spacing
+            doc.add_paragraph()
+
+        # Save to BytesIO
+        word_buffer = BytesIO()
+        doc.save(word_buffer)
+        word_buffer.seek(0)
+
+        # Generate filename
+        import time
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        filename = f"{report_data['title'].replace(' ', '_')}_{timestamp}.docx"
+
+        return {
+            "success": True,
+            "filename": filename,
+            "content": word_buffer.getvalue(),
+            "download_url": f"/direct/{filename}",
+            "file_size": len(word_buffer.getvalue())
+        }
+
+    except ImportError:
+        # If python-docx is not available, return an error
+        return {"error": "python-docx library not installed. Please install it with: pip install python-docx"}
+    except Exception as e:
+        return {"error": f"Direct Word generation failed: {str(e)}"}
+
+def add_content_with_validation(paragraph, content, validation_data):
+    """Add content with inline validation comments"""
+    # Get validation issues
+    issues = validation_data.get('issues', []) or validation_data.get('validation_issues', [])
+
+    if not issues:
+        paragraph.add_run(content)
+        return
+
+    # Find issues that relate to this content
+    relevant_issues = []
+    for issue in issues:
+        text_span = issue.get('text_span', '')
+        if text_span and text_span.strip() in content:
+            relevant_issues.append(issue)
+
+    if not relevant_issues:
+        paragraph.add_run(content)
+        return
+
+    # Add content with highlighted sections and comments
+    paragraph.add_run(content)
+
+    # Add validation comments at the end of the paragraph
+    for i, issue in enumerate(relevant_issues):
+        severity = issue.get('severity', 'medium')
+        issue_type = issue.get('issue_type', 'Issue')
+        description = issue.get('description', 'No description')
+
+        # Add comment as a new line with styling
+        comment_run = paragraph.add_run(f"\n[AI Validation #{i+1} - {issue_type.upper()}]: {description}")
+        comment_run.font.size = Pt(8)
+        comment_run.font.italic = True
+
+        # Color code based on severity
+        if severity == 'high':
+            comment_run.font.color.rgb = RGBColor(204, 0, 0)  # Red
+        elif severity == 'medium':
+            comment_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
+        else:
+            comment_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
 
 def download_word_document(download_url):
     """Download Word document from the backend"""
@@ -541,10 +709,31 @@ def word_download_fragment(report):
             progress_bar.progress(0.3)
 
             if export_result and not export_result.get('error'):
-                download_url = export_result.get('download_url')
-                log_debug(f"Download URL: {download_url}")
+                # Check if this is a direct generation result (has 'content') or backend result (has 'download_url')
+                if export_result.get('content'):
+                    # Direct generation - content is already available
+                    status_text.text("✅ Step 3/4: Direct Word document generated...")
+                    progress_bar.progress(0.8)
 
-                if download_url:
+                    filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                    file_size = export_result.get('file_size', len(export_result['content']))
+
+                    st.session_state.word_download_data = {
+                        'content': export_result['content'],
+                        'filename': filename,
+                        'type': 'direct'
+                    }
+                    st.session_state.word_preparation_state = 'prepared'
+                    log_debug(f"Direct Word document prepared successfully: {filename} ({file_size} bytes)")
+
+                    status_text.text("✅ Document ready!")
+                    progress_bar.progress(1.0)
+
+                elif export_result.get('download_url'):
+                    # Backend generation - need to download
+                    download_url = export_result.get('download_url')
+                    log_debug(f"Download URL: {download_url}")
+
                     status_text.text("⬇️ Step 3/4: Downloading Word document...")
                     progress_bar.progress(0.6)
                     log_debug("About to call download_word_document()")
@@ -571,7 +760,7 @@ def word_download_fragment(report):
                     else:
                         raise Exception("Failed to download generated document")
                 else:
-                    raise Exception("No download URL provided")
+                    raise Exception("Export result missing both content and download_url")
             else:
                 error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
                 raise Exception(f"Backend export failed: {error_msg}")
@@ -616,7 +805,12 @@ def word_download_fragment(report):
     elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
         # DOWNLOAD READY STATE - stays visible after clicking download
         word_data = st.session_state.word_download_data
-        doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
+        doc_type_mapping = {
+            'advanced': 'Professional (Backend)',
+            'direct': 'Professional (Direct)',
+            'basic': 'Basic'
+        }
+        doc_type = doc_type_mapping.get(word_data['type'], 'Basic')
         file_size = len(word_data['content'])
 
         st.success(f"✅ {doc_type} document ready!")
@@ -693,7 +887,12 @@ def word_download_section(report):
     if st.session_state.word_download_data:
         # DOWNLOAD READY STATE - stays visible after clicking download
         word_data = st.session_state.word_download_data
-        doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
+        doc_type_mapping = {
+            'advanced': 'Professional (Backend)',
+            'direct': 'Professional (Direct)',
+            'basic': 'Basic'
+        }
+        doc_type = doc_type_mapping.get(word_data['type'], 'Basic')
         file_size = len(word_data['content'])
 
         st.success(f"✅ {doc_type} document ready!")
@@ -862,10 +1061,31 @@ def prepare_word_document_immediate(report, include_validation_checked, log_debu
             progress_bar.progress(0.3)
 
             if export_result and not export_result.get('error'):
-                download_url = export_result.get('download_url')
-                log_debug(f"Download URL: {download_url}")
+                # Check if this is a direct generation result (has 'content') or backend result (has 'download_url')
+                if export_result.get('content'):
+                    # Direct generation - content is already available
+                    status_text.text("✅ Step 3/4: Direct Word document generated...")
+                    progress_bar.progress(0.8)
 
-                if download_url:
+                    filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                    file_size = export_result.get('file_size', len(export_result['content']))
+
+                    st.session_state.word_download_data = {
+                        'content': export_result['content'],
+                        'filename': filename,
+                        'type': 'direct'
+                    }
+                    st.session_state.word_preparation_state = 'prepared'
+                    log_debug(f"Direct Word document prepared successfully: {filename} ({file_size} bytes)")
+
+                    status_text.text("✅ Document ready!")
+                    progress_bar.progress(1.0)
+
+                elif export_result.get('download_url'):
+                    # Backend generation - need to download
+                    download_url = export_result.get('download_url')
+                    log_debug(f"Download URL: {download_url}")
+
                     status_text.text("⬇️ Step 3/4: Downloading Word document...")
                     progress_bar.progress(0.6)
                     log_debug("About to call download_word_document()")
@@ -892,7 +1112,7 @@ def prepare_word_document_immediate(report, include_validation_checked, log_debu
                     else:
                         raise Exception("Failed to download generated document")
                 else:
-                    raise Exception("No download URL provided")
+                    raise Exception("Export result missing both content and download_url")
             else:
                 error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
                 raise Exception(f"Backend export failed: {error_msg}")
