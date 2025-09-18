@@ -671,15 +671,15 @@ def word_download_fragment(report):
             st.rerun()
 
 def word_download_section(report):
-    """Word document download section without fragment - fixes state issues"""
+    """Word document download section with proper spinner and state management"""
     st.markdown("### 📄 Word Document")
 
     include_validation_checked = st.checkbox("Include AI validation comments", value=True, key="word_validation_main")
 
     # Initialize word preparation state
-    if 'word_preparation_state' not in st.session_state:
-        st.session_state.word_preparation_state = 'ready'  # ready, preparing, prepared, error
+    if 'word_download_data' not in st.session_state:
         st.session_state.word_download_data = None
+    if 'word_preparation_logs' not in st.session_state:
         st.session_state.word_preparation_logs = []
 
     # Debug logging function
@@ -689,50 +689,8 @@ def word_download_section(report):
         st.session_state.word_preparation_logs.append(log_entry)
         print(f"DEBUG: {log_entry}")  # Console logging
 
-    # Show current status and controls based on state
-    if st.session_state.word_preparation_state == 'ready':
-        st.info("💡 Ready to prepare Word document")
-
-        # Show debug logs if any exist
-        if st.session_state.word_preparation_logs:
-            with st.expander("🔍 Debug Logs", expanded=False):
-                for log_entry in st.session_state.word_preparation_logs[-5:]:  # Show last 5 logs
-                    st.text(log_entry)
-
-        if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word_main"):
-            log_debug("User clicked Prepare Word Document button")
-            log_debug(f"Report data available: {report is not None}")
-            if report:
-                log_debug(f"Report title: {report.get('title', 'No title')}")
-                log_debug(f"Report sections: {len(report.get('sections', []))}")
-
-            # Set state to preparing and rerun - this SHOULD work
-            st.session_state.word_preparation_state = 'preparing'
-            st.rerun()
-
-    elif st.session_state.word_preparation_state == 'preparing':
-        st.warning("🔄 Preparing document... please wait")
-
-        # Debug: Check if report data is available
-        log_debug(f"PREPARING STATE: Report data available: {report is not None}")
-        if report:
-            log_debug(f"PREPARING STATE: Report title: {report.get('title', 'No title')}")
-            log_debug(f"PREPARING STATE: Report sections: {len(report.get('sections', []))}")
-        else:
-            log_debug("ERROR: No report data available for Word generation!")
-            st.error("❌ No report data available for Word generation")
-            st.session_state.word_preparation_state = 'error'
-            st.session_state.word_error_details = {
-                'advanced_error': 'No report data available',
-                'basic_error': 'Report parameter is None'
-            }
-            st.rerun()
-            return
-
-        # Force immediate preparation
-        prepare_word_document_immediate(report, include_validation_checked, log_debug)
-
-    elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
+    # Check if we already have a prepared document
+    if st.session_state.word_download_data:
         # DOWNLOAD READY STATE - stays visible after clicking download
         word_data = st.session_state.word_download_data
         doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
@@ -760,34 +718,107 @@ def word_download_section(report):
 
         # Option to prepare new document (smaller button)
         if st.button("🔄 Prepare New", use_container_width=True, key="prepare_new_word_main"):
-            st.session_state.word_preparation_state = 'ready'
             st.session_state.word_download_data = None
             st.rerun()
 
-    elif st.session_state.word_preparation_state == 'error':
-        st.error("❌ Document preparation failed")
+    else:
+        # READY STATE - show preparation button
+        st.info("💡 Ready to prepare Word document")
 
-        # Show error details if available
-        if hasattr(st.session_state, 'word_error_details'):
-            error_details = st.session_state.word_error_details
-            with st.expander("🔍 Error Details", expanded=True):
-                st.text("Advanced Export Error:")
-                st.code(error_details.get('advanced_error', 'Unknown error'))
-                st.text("Basic Export Error:")
-                st.code(error_details.get('basic_error', 'Unknown error'))
-
-        # Show debug logs
+        # Show debug logs if any exist
         if st.session_state.word_preparation_logs:
-            with st.expander("🔍 Debug Logs", expanded=True):
-                for log_entry in st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=False):
+                for log_entry in st.session_state.word_preparation_logs[-5:]:  # Show last 5 logs
                     st.text(log_entry)
 
-        if st.button("🔄 Try Again", use_container_width=True, key="retry_word_main"):
-            st.session_state.word_preparation_state = 'ready'
-            st.session_state.word_download_data = None
-            if hasattr(st.session_state, 'word_error_details'):
-                delattr(st.session_state, 'word_error_details')
-            st.rerun()
+        # The main preparation button with spinner
+        if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word_main"):
+            log_debug("User clicked Prepare Word Document button")
+            log_debug(f"Report data available: {report is not None}")
+
+            if not report:
+                log_debug("ERROR: No report data available!")
+                st.error("❌ No report data available for Word generation")
+                return
+
+            log_debug(f"Report title: {report.get('title', 'No title')}")
+            log_debug(f"Report sections: {len(report.get('sections', []))}")
+
+            # Use st.spinner for the entire preparation process
+            with st.spinner("🔄 Preparing Word document... Please wait"):
+                log_debug("=== STARTING WORD DOCUMENT PREPARATION ===")
+
+                try:
+                    log_debug("Step 1/4: Calling backend export service...")
+
+                    # First try advanced export through backend
+                    export_result = create_report_and_export_word(report, include_validation_checked)
+                    log_debug(f"Export result received: {export_result}")
+
+                    if export_result and not export_result.get('error'):
+                        download_url = export_result.get('download_url')
+                        log_debug(f"Download URL: {download_url}")
+
+                        if download_url:
+                            log_debug("Step 2/4: Downloading Word document...")
+
+                            # Download the file content
+                            word_content = download_word_document(download_url)
+                            log_debug(f"Downloaded content size: {len(word_content) if word_content else 'None'}")
+
+                            if word_content:
+                                log_debug("Step 3/4: Finalizing document...")
+
+                                filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                                st.session_state.word_download_data = {
+                                    'content': word_content,
+                                    'filename': filename,
+                                    'type': 'advanced'
+                                }
+                                log_debug(f"Advanced Word document prepared successfully: {filename}")
+
+                                # SUCCESS! Rerun to show download button
+                                st.rerun()
+                            else:
+                                raise Exception("Failed to download generated document")
+                        else:
+                            raise Exception("No download URL provided")
+                    else:
+                        error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
+                        raise Exception(f"Backend export failed: {error_msg}")
+
+                except Exception as e:
+                    log_debug(f"Advanced export failed: {str(e)}")
+
+                    # Fallback to basic Word document
+                    try:
+                        log_debug("Step 4/4: Creating basic Word document as fallback...")
+
+                        basic_word_content = create_basic_word_content_with_comments(report, include_validation_checked)
+                        log_debug(f"Basic content size: {len(basic_word_content) if basic_word_content else 'None'}")
+
+                        st.session_state.word_download_data = {
+                            'content': basic_word_content,
+                            'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                            'type': 'basic'
+                        }
+                        log_debug("Basic Word document prepared successfully")
+
+                        # SUCCESS! Rerun to show download button
+                        st.rerun()
+
+                    except Exception as basic_error:
+                        log_debug(f"Both advanced and basic document generation failed: {str(basic_error)}")
+                        st.error(f"❌ Document preparation failed: {str(basic_error)}")
+
+                        # Show error details
+                        with st.expander("🔍 Error Details", expanded=True):
+                            st.text("Advanced Export Error:")
+                            st.code(str(e))
+                            st.text("Basic Export Error:")
+                            st.code(str(basic_error))
+
+                        return
 
 def prepare_word_document_immediate(report, include_validation_checked, log_debug):
     """Immediately prepare word document without state transitions"""
