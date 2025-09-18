@@ -1470,7 +1470,7 @@ def show_report_generation_page():
     # Initialize segments in session state
     if "segments" not in st.session_state:
         st.session_state.segments = [
-            {'name':x,"prompt":y} for x,y in default_prompt.default_section_prompt
+            {'name':x,"prompt":y} for x,y in default_prompt.default_section_prompt.items()
         ]
     
     # Add/Edit segments
