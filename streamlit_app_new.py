@@ -706,11 +706,31 @@ def word_download_section(report):
                 log_debug(f"Report title: {report.get('title', 'No title')}")
                 log_debug(f"Report sections: {len(report.get('sections', []))}")
 
-            # Immediately start preparation process (no state change + rerun)
+            # Set state to preparing and rerun - this SHOULD work
             st.session_state.word_preparation_state = 'preparing'
+            st.rerun()
 
-            # Force immediate preparation
-            prepare_word_document_immediate(report, include_validation_checked, log_debug)
+    elif st.session_state.word_preparation_state == 'preparing':
+        st.warning("🔄 Preparing document... please wait")
+
+        # Debug: Check if report data is available
+        log_debug(f"PREPARING STATE: Report data available: {report is not None}")
+        if report:
+            log_debug(f"PREPARING STATE: Report title: {report.get('title', 'No title')}")
+            log_debug(f"PREPARING STATE: Report sections: {len(report.get('sections', []))}")
+        else:
+            log_debug("ERROR: No report data available for Word generation!")
+            st.error("❌ No report data available for Word generation")
+            st.session_state.word_preparation_state = 'error'
+            st.session_state.word_error_details = {
+                'advanced_error': 'No report data available',
+                'basic_error': 'Report parameter is None'
+            }
+            st.rerun()
+            return
+
+        # Force immediate preparation
+        prepare_word_document_immediate(report, include_validation_checked, log_debug)
 
     elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
         # DOWNLOAD READY STATE - stays visible after clicking download
@@ -772,6 +792,10 @@ def word_download_section(report):
 def prepare_word_document_immediate(report, include_validation_checked, log_debug):
     """Immediately prepare word document without state transitions"""
 
+    log_debug("=== ENTERING prepare_word_document_immediate ===")
+    log_debug(f"Report parameter: {report is not None}")
+    log_debug(f"Include validation: {include_validation_checked}")
+
     if not report:
         log_debug("ERROR: No report data available for Word generation!")
         st.error("❌ No report data available for Word generation")
@@ -796,6 +820,8 @@ def prepare_word_document_immediate(report, include_validation_checked, log_debu
             status_text.text("🔄 Step 1/4: Calling backend export service...")
             progress_bar.progress(0.1)
             log_debug("About to call create_report_and_export_word()")
+            log_debug(f"Report title for backend call: {report.get('title', 'Unknown')}")
+            log_debug(f"Report sections count for backend call: {len(report.get('sections', []))}")
 
             # First try advanced export through backend
             export_result = create_report_and_export_word(report, include_validation_checked)
