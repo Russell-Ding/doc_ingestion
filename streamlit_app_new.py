@@ -1270,12 +1270,20 @@ def show_upload_page():
         - 🖼️ Screenshots of documents or reports
         - 📋 Images with text, tables, or charts
         - 📄 Plain text files needing AI enhancement
+        - 🌍 **Foreign language documents** (automatically translated to English)
 
         **📋 PDF Processing:**
         - Processes up to 20 pages automatically
         - Each page converted to high-quality image
         - Page markers added for reference
         - Maintains document structure across pages
+
+        **🌍 Language Processing:**
+        - **Automatically converts all content to English**
+        - Supports Chinese, Spanish, French, German, Japanese, Korean, and other languages
+        - Preserves technical accuracy during translation
+        - Maintains document structure and formatting
+        - Perfect for international financial documents
 
         **⚠️ Limited support:**
         - Word documents (save as PDF first)
@@ -1422,7 +1430,7 @@ def show_upload_page():
         # Help section
         st.markdown("---")
         st.markdown("**💡 Tips for Best Results:**")
-        col_tip1, col_tip2 = st.columns(2)
+        col_tip1, col_tip2, col_tip3 = st.columns(3)
 
         with col_tip1:
             st.write("**For Financial Documents:**")
@@ -1435,6 +1443,13 @@ def show_upload_page():
             st.write("• Take clear, high-resolution photos")
             st.write("• Ensure good lighting and contrast")
             st.write("• Use 'comprehensive' mode for mixed content")
+
+        with col_tip3:
+            st.write("**For Foreign Language Docs:**")
+            st.write("• All languages automatically converted to English")
+            st.write("• Technical accuracy preserved")
+            st.write("• Works with Chinese, Japanese, Spanish, etc.")
+            st.write("• Perfect for international financial reports")
 
     st.markdown("---")
 
