@@ -1303,7 +1303,16 @@ def show_generated_report(report):
     
     # Download options
     st.subheader("💾 Download Report")
-    
+
+    # Status indicator for document preparation
+    if hasattr(st.session_state, 'word_preparation_state'):
+        if st.session_state.word_preparation_state == 'preparing':
+            st.info("🔄 **Status:** Word document is being prepared... Please wait.")
+        elif st.session_state.word_preparation_state == 'prepared':
+            st.success("✅ **Status:** Word document is ready for download!")
+        elif st.session_state.word_preparation_state == 'error':
+            st.error("❌ **Status:** Document preparation encountered errors.")
+
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -1353,7 +1362,9 @@ def show_generated_report(report):
 
                 except Exception as e:
                     # Fallback to basic Word document
-                    st.warning(f"⚠️ Advanced export failed ({str(e)}), creating basic document...")
+                    st.warning(f"⚠️ Advanced export failed: {str(e)}")
+                    st.info("🔄 Trying basic document generation as fallback...")
+
                     try:
                         basic_word_content = create_basic_word_content(report)
                         st.session_state.word_download_data = {
@@ -1363,9 +1374,23 @@ def show_generated_report(report):
                         }
                         st.session_state.word_preparation_state = 'prepared'
                         st.info("ℹ️ Basic Word document ready (validation comments not included)")
+
+                        # Show debugging info in expander
+                        with st.expander("🔍 Debugging Information", expanded=False):
+                            st.write("**Advanced export error:**")
+                            st.code(str(e))
+                            st.write("**Fallback:** Basic document generation succeeded")
+                            st.write("**Note:** Install python-docx for better formatting")
+
                     except Exception as basic_error:
-                        st.error(f"❌ Failed to create document: {str(basic_error)}")
+                        st.error(f"❌ Both advanced and basic document generation failed")
                         st.session_state.word_preparation_state = 'error'
+
+                        # Store error details for debugging
+                        st.session_state.word_error_details = {
+                            'advanced_error': str(e),
+                            'basic_error': str(basic_error)
+                        }
 
                 # Auto-rerun to show the result
                 time.sleep(1)
@@ -1375,33 +1400,94 @@ def show_generated_report(report):
         elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
             word_data = st.session_state.word_download_data
 
-            # Show document info
+            # Show document info with persistent details
             doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
             st.success(f"✅ {doc_type} Word document ready!")
 
-            # Download button that preserves the prepared state
+            # Show file details
+            file_size = len(word_data['content'])
+            st.info(f"📄 **{word_data['filename']}** ({file_size/1024:.1f} KB)")
+
+            # Persistent download section - stays visible after download
+            st.markdown("**📥 Download Options:**")
+
+            # Primary download button
             st.download_button(
                 label=f"📄 Download {doc_type} Document",
                 data=word_data['content'],
                 file_name=word_data['filename'],
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
-                key="download_word"
+                key="download_word",
+                help="Click to download - you can download multiple times"
             )
 
-            # Reset button to prepare a new document
-            if st.button("🔄 Prepare New Document", use_container_width=True, key="reset_word"):
-                st.session_state.word_preparation_state = 'ready'
-                st.session_state.word_download_data = None
-                st.rerun()
+            # Additional options in expandable section
+            with st.expander("🔧 Additional Options", expanded=False):
+                st.write("**Document Actions:**")
+
+                # Reset button to prepare a new document
+                if st.button("🔄 Prepare New Document", use_container_width=True, key="reset_word"):
+                    st.session_state.word_preparation_state = 'ready'
+                    st.session_state.word_download_data = None
+                    st.rerun()
+
+                # Option to prepare with different validation settings
+                new_validation = st.checkbox("Include validation comments", value=include_validation, key="new_validation")
+                if new_validation != include_validation:
+                    if st.button("🔄 Regenerate with New Settings", use_container_width=True, key="regenerate_word"):
+                        st.session_state.word_preparation_state = 'ready'
+                        st.session_state.word_download_data = None
+                        st.rerun()
+
+                st.write("**File Info:**")
+                st.write(f"• Document type: {doc_type}")
+                st.write(f"• File size: {file_size:,} bytes ({file_size/1024:.1f} KB)")
+                st.write(f"• Validation included: {'Yes' if include_validation else 'No'}")
+
+            # Persistent success message
+            st.success("🎉 **Document ready!** The UI remains available for multiple downloads or format changes.")
 
         # Error state
         elif st.session_state.word_preparation_state == 'error':
             st.error("❌ Document preparation failed")
-            if st.button("🔄 Try Again", use_container_width=True, key="retry_word"):
-                st.session_state.word_preparation_state = 'ready'
-                st.session_state.word_download_data = None
-                st.rerun()
+
+            # Show error details if available
+            if hasattr(st.session_state, 'word_error_details'):
+                error_details = st.session_state.word_error_details
+                with st.expander("🔍 Error Details & Troubleshooting", expanded=True):
+                    st.write("**Advanced Export Error:**")
+                    st.code(error_details.get('advanced_error', 'Unknown error'))
+
+                    st.write("**Basic Export Error:**")
+                    st.code(error_details.get('basic_error', 'Unknown error'))
+
+                    st.markdown("**🛠️ Troubleshooting Steps:**")
+                    st.write("1. **Check Backend Connection:** Ensure the backend server is running")
+                    st.write("2. **Install Dependencies:** Run `pip install python-docx` for Word support")
+                    st.write("3. **Check Permissions:** Ensure write permissions in the export directory")
+                    st.write("4. **Try Text Export:** Use the Text download option as an alternative")
+
+                    # Backend status check
+                    if st.button("🔍 Check Backend Status", key="check_backend"):
+                        if check_backend_health():
+                            st.success("✅ Backend is responding")
+                        else:
+                            st.error("❌ Backend is not responding")
+
+            # Retry and alternative options
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Try Again", use_container_width=True, key="retry_word"):
+                    st.session_state.word_preparation_state = 'ready'
+                    st.session_state.word_download_data = None
+                    if hasattr(st.session_state, 'word_error_details'):
+                        delattr(st.session_state, 'word_error_details')
+                    st.rerun()
+
+            with col2:
+                if st.button("📝 Use Text Export Instead", use_container_width=True, key="use_text"):
+                    st.info("💡 Text export is available below as an alternative!")
     
     with col2:
         # Download as text

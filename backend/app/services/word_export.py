@@ -44,46 +44,60 @@ class WordReportGenerator:
         )
         
         try:
+            logger.info("Creating Word document...")
             # Create new document or load template
             doc = self._create_document()
-            
+
+            logger.info("Setting up document styles...")
             # Set up document styles
             self._setup_document_styles(doc)
-            
+
+            logger.info("Adding document header...")
             # Add document header
             self._add_document_header(doc, report_data)
-            
+
+            logger.info("Adding executive summary...")
             # Add executive summary
             self._add_executive_summary(doc, report_data, segments)
-            
+
+            logger.info(f"Adding {len(segments)} report segments...")
             # Add report segments
             for i, segment in enumerate(segments):
+                logger.info(f"Processing segment {i+1}: {segment.get('name', 'Untitled')}")
                 self._add_segment_content(
-                    doc, 
-                    segment, 
+                    doc,
+                    segment,
                     validation_results[i] if i < len(validation_results) else None,
                     include_validation_comments
                 )
-            
+
+            logger.info("Adding appendices...")
             # Add appendices
             self._add_appendices(doc, report_data, segments)
-            
+
             # Save document
             filename = self._generate_filename(report_data)
             file_path = self.export_directory / filename
-            
+
+            logger.info(f"Saving document to: {file_path}")
             doc.save(str(file_path))
-            
+
+            # Verify file was created
+            if not file_path.exists():
+                raise Exception(f"File was not created at {file_path}")
+
+            file_size = file_path.stat().st_size
             logger.info(
                 "Word report generated successfully",
                 filename=filename,
-                file_size=file_path.stat().st_size
+                file_size=file_size,
+                file_path=str(file_path)
             )
-            
+
             return {
                 "filename": filename,
                 "file_path": str(file_path),
-                "file_size": file_path.stat().st_size,
+                "file_size": file_size,
                 "download_url": f"/api/v1/reports/download/{filename}"
             }
             
@@ -194,10 +208,19 @@ class WordReportGenerator:
         # Segment content
         content = segment.get('generated_content', '')
         if not content:
+            # Add placeholder content with segment details
             placeholder = doc.add_paragraph()
             placeholder.add_run('[Content not generated for this section]')
             placeholder.runs[0].font.italic = True
             placeholder.runs[0].font.color.rgb = RGBColor(128, 128, 128)
+
+            # Add segment metadata if available
+            if segment.get('description'):
+                desc_para = doc.add_paragraph()
+                desc_para.add_run(f"Description: {segment.get('description')}")
+                desc_para.runs[0].font.italic = True
+                desc_para.runs[0].font.color.rgb = RGBColor(100, 100, 100)
+
             return
         
         # Split content into paragraphs
