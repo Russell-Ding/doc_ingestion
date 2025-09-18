@@ -585,54 +585,118 @@ class DocumentProcessor:
         return chunks
     
     def _split_text(self, text: str) -> List[str]:
-        """Split text into appropriately sized chunks"""
+        """Split text into appropriately sized chunks with token limit awareness"""
+
+        # Estimate tokens: roughly 1 token = 3.5-4 characters for English
+        # Use conservative estimate to stay well under 8192 token limit
+        MAX_CHARS_PER_CHUNK = 6000  # ~1500-1700 tokens, safe margin
+        MIN_CHARS_PER_CHUNK = 100   # Minimum viable chunk size
+
+        # If text is very short, return as single chunk
+        if len(text) <= MAX_CHARS_PER_CHUNK:
+            return [text] if text.strip() else []
+
         words = text.split()
         chunks = []
         current_chunk = []
-        current_size = 0
-        
+        current_chars = 0
+
         for word in words:
-            current_chunk.append(word)
-            current_size += 1
-            
-            if current_size >= settings.CHUNK_SIZE:
-                # Look for a good breaking point
+            word_chars = len(word) + 1  # +1 for space
+
+            # Check if adding this word would exceed limit
+            if current_chars + word_chars > MAX_CHARS_PER_CHUNK and current_chunk:
+                # Try to find a good breaking point
                 chunk_text = ' '.join(current_chunk)
-                
+
                 # Try to break at sentence boundaries
                 sentences = chunk_text.split('. ')
-                if len(sentences) > 1:
+                if len(sentences) > 1 and len(sentences[0]) > MIN_CHARS_PER_CHUNK:
                     # Keep all but the last sentence
                     chunk_text = '. '.join(sentences[:-1]) + '.'
-                    remaining_words = sentences[-1].split()
+                    remaining_words = sentences[-1].split() + [word]
                     current_chunk = remaining_words
-                    current_size = len(remaining_words)
+                    current_chars = sum(len(w) + 1 for w in remaining_words)
                 else:
-                    # Break at the chunk boundary
-                    current_chunk = []
-                    current_size = 0
-                
-                if chunk_text.strip():
+                    # Try to break at paragraph boundaries
+                    paragraphs = chunk_text.split('\n\n')
+                    if len(paragraphs) > 1 and len(paragraphs[0]) > MIN_CHARS_PER_CHUNK:
+                        chunk_text = '\n\n'.join(paragraphs[:-1])
+                        remaining_words = paragraphs[-1].split() + [word]
+                        current_chunk = remaining_words
+                        current_chars = sum(len(w) + 1 for w in remaining_words)
+                    else:
+                        # Break at current boundary
+                        current_chunk = [word]
+                        current_chars = word_chars
+
+                # Add the chunk if it has meaningful content
+                if chunk_text.strip() and len(chunk_text) > MIN_CHARS_PER_CHUNK:
                     chunks.append(chunk_text.strip())
-        
+                elif chunk_text.strip():  # Even small chunks are better than losing content
+                    chunks.append(chunk_text.strip())
+            else:
+                current_chunk.append(word)
+                current_chars += word_chars
+
         # Add remaining text
         if current_chunk:
             chunk_text = ' '.join(current_chunk)
             if chunk_text.strip():
                 chunks.append(chunk_text.strip())
-        
-        return chunks
+
+        # Final safety check: if any chunk is still too long, force split it
+        final_chunks = []
+        for chunk in chunks:
+            if len(chunk) > MAX_CHARS_PER_CHUNK:
+                logger.warning(f"Force splitting oversized chunk of {len(chunk)} characters")
+                # Force split at character boundary
+                while len(chunk) > MAX_CHARS_PER_CHUNK:
+                    split_point = MAX_CHARS_PER_CHUNK
+                    # Try to split at word boundary
+                    last_space = chunk.rfind(' ', 0, split_point)
+                    if last_space > split_point * 0.8:  # If we found a space reasonably close
+                        split_point = last_space
+
+                    final_chunks.append(chunk[:split_point].strip())
+                    chunk = chunk[split_point:].strip()
+
+                if chunk.strip():
+                    final_chunks.append(chunk.strip())
+            else:
+                final_chunks.append(chunk)
+
+        return final_chunks
     
     async def _generate_embeddings(self, chunks: List[DocumentChunk]):
-        """Generate embeddings for all chunks"""
+        """Generate embeddings for all chunks with token limit validation"""
         texts = [chunk.content for chunk in chunks]
-        
+
+        # Pre-validate chunk sizes to prevent token limit errors
+        validated_texts = []
+        for i, text in enumerate(texts):
+            # Rough token estimate: 1 token ≈ 3.5-4 characters
+            estimated_tokens = len(text) / 3.5
+
+            if estimated_tokens > 8000:  # Conservative limit
+                logger.warning(f"Chunk {i} estimated at {estimated_tokens:.0f} tokens, truncating")
+                # Truncate to safe size
+                safe_char_limit = 7000  # ~2000 tokens
+                truncated_text = text[:safe_char_limit] + "\n\n[Content truncated due to token limit]"
+                validated_texts.append(truncated_text)
+                # Update the chunk content as well
+                chunks[i].content = truncated_text
+                chunks[i].char_count = len(truncated_text)
+                chunks[i].word_count = len(truncated_text.split())
+            else:
+                validated_texts.append(text)
+
         try:
-            embeddings = await bedrock_service.generate_embeddings(texts)
-            
+            embeddings = await bedrock_service.generate_embeddings(validated_texts)
+
             for chunk, embedding in zip(chunks, embeddings):
                 chunk.embeddings = embedding
-                
+
         except Exception as e:
             logger.error("Failed to generate embeddings", error=str(e))
             # Set empty embeddings as fallback
