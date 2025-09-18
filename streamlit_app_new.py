@@ -1470,10 +1470,6 @@ def show_report_generation_page():
     # Initialize segments in session state
     if "segments" not in st.session_state:
         st.session_state.segments = [
-            {"name": "Executive Summary", "prompt": "Provide a high-level executive summary of the financial position and key findings."},
-            {"name": "Financial Analysis", "prompt": "Analyze revenue trends, profitability, cash flow, and key financial ratios."},
-            {"name": "Risk Assessment", "prompt": "Identify and assess key business risks, financial risks, and credit risks."}
-
             {'name':x,"prompt":y} for x,y in default_prompt.default_section_prompt
         ]
     
