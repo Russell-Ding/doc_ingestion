@@ -23,7 +23,8 @@ def check_backend_health():
     try:
         response = requests.get(f"{API_BASE_URL}/health/", timeout=2)
         return response.status_code == 200
-    except:
+    except Exception as e:
+        print(f"Backend health check failed: {e}")
         return False
 
 def upload_document(file, document_name=None):
@@ -292,6 +293,22 @@ def word_download_fragment(report):
 
     elif st.session_state.word_preparation_state == 'preparing':
         st.warning("🔄 Preparing document... please wait")
+
+        # Debug: Check if report data is available
+        log_debug(f"Report data available: {report is not None}")
+        if report:
+            log_debug(f"Report title: {report.get('title', 'No title')}")
+            log_debug(f"Report sections: {len(report.get('sections', []))}")
+        else:
+            log_debug("ERROR: No report data available for Word generation!")
+            st.error("❌ No report data available for Word generation")
+            st.session_state.word_preparation_state = 'error'
+            st.session_state.word_error_details = {
+                'advanced_error': 'No report data available',
+                'basic_error': 'Report parameter is None'
+            }
+            st.rerun()
+            return
 
         # Show progress indicator
         progress_bar = st.progress(0)
