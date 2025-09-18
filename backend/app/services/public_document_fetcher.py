@@ -278,7 +278,7 @@ class PublicDocumentFetcher:
             logger.error("Error processing downloaded filings", error=str(e))
 
     async def _clean_edgar_file(self, file_path: str) -> str:
-        """Clean EDGAR XML/XBRL files to extract readable content with improved sectioning"""
+        """Clean EDGAR XML/XBRL files to extract readable content with proper main filing extraction"""
         try:
             path_obj = Path(file_path)
 
@@ -288,59 +288,27 @@ class PublicDocumentFetcher:
 
             logger.info(f"Processing EDGAR file: {file_path} ({len(content):,} chars)")
 
-            # SEC filings often contain multiple sections - handle them separately
-            sections = []
+            # Extract the main filing (10-Q, 10-K, etc.) - not exhibits
+            main_filing_content = self._extract_main_filing(content)
 
-            # Extract SEC header section (plain text)
-            if '<SEC-HEADER>' in content and '</SEC-HEADER>' in content:
-                header_start = content.find('<SEC-HEADER>')
-                header_end = content.find('</SEC-HEADER>') + len('</SEC-HEADER>')
-                header_content = content[header_start:header_end]
-
-                # Clean header content (remove tags but keep text)
-                header_cleaned = re.sub(r'<[^>]+>', '\n', header_content)
-                header_cleaned = re.sub(r'\n+', '\n', header_cleaned)
-                sections.append("=== SEC FILING HEADER ===\n" + header_cleaned.strip())
-                logger.info("Extracted SEC header section")
-
-            # Extract XBRL/HTML sections
-            if '<XBRL>' in content or '<html' in content.lower():
-                logger.info("Detected mixed content - extracting XBRL sections")
-
-                # Find XBRL content sections
-                xbrl_sections = re.findall(r'<XBRL>.*?</XBRL>|<html.*?</html>', content, re.DOTALL | re.IGNORECASE)
-
-                for i, xbrl_section in enumerate(xbrl_sections[:3]):  # Limit to first 3 sections
-                    logger.info(f"Processing XBRL section {i+1}/{min(3, len(xbrl_sections))}")
-                    cleaned_xbrl = self._extract_text_from_xbrl(xbrl_section)
-                    if cleaned_xbrl.strip():
-                        sections.append(f"=== XBRL SECTION {i+1} ===\n" + cleaned_xbrl)
-
-            # If no structured content found, try whole document
-            if not sections:
-                logger.info("No structured sections found - processing entire document")
+            if main_filing_content:
+                logger.info(f"Extracted main filing: {len(main_filing_content):,} chars")
+                cleaned_content = self._process_main_filing_content(main_filing_content)
+            else:
+                logger.warning("Could not extract main filing, falling back to full document processing")
+                # Fallback to previous method
                 if self._is_xml_content(content):
-                    logger.info("Detected XML/XBRL content - applying deep cleaning")
                     cleaned_content = self._extract_text_from_xbrl(content)
                 else:
-                    logger.info("Detected plain text - applying light cleaning")
                     cleaned_content = self._clean_plain_text(content)
-            else:
-                # Combine sections
-                cleaned_content = '\n\n'.join(sections)
-
-                # Apply token limit safety
-                MAX_CHARS = 8192 * 3  # Conservative estimate to stay under token limit
-                if len(cleaned_content) > MAX_CHARS:
-                    logger.warning(f"Content length {len(cleaned_content)} exceeds safe limit, truncating")
-                    cleaned_content = cleaned_content[:MAX_CHARS] + "\n\n[Content truncated due to length]"
 
             # Create cleaned file
             cleaned_file_path = str(path_obj.parent / f"{path_obj.stem}_cleaned.txt")
             async with aiofiles.open(cleaned_file_path, 'w', encoding='utf-8') as f:
                 await f.write(cleaned_content)
 
-            logger.info(f"Cleaned file saved: {cleaned_file_path} ({len(cleaned_content):,} chars, {((len(content) - len(cleaned_content)) / len(content) * 100):.1f}% reduction)")
+            reduction_pct = ((len(content) - len(cleaned_content)) / len(content) * 100) if content else 0
+            logger.info(f"Cleaned file saved: {cleaned_file_path} ({len(cleaned_content):,} chars, {reduction_pct:.1f}% reduction)")
             return cleaned_file_path
 
         except Exception as e:
@@ -515,6 +483,120 @@ class PublicDocumentFetcher:
                 prev_line = line
 
         return '\n'.join(final_lines).strip()
+
+    def _extract_main_filing(self, content: str) -> str:
+        """Extract the main filing content (10-Q, 10-K, etc.) from SEC submission"""
+        import re
+
+        # Look for main filing types (not exhibits)
+        main_filing_pattern = r'<TYPE>(10-[QK]|8-K|20-F)\s*.*?<TEXT>\s*(.*?)(?=<TYPE>|$)'
+        match = re.search(main_filing_pattern, content, re.DOTALL | re.IGNORECASE)
+
+        if match:
+            filing_type = match.group(1)
+            main_content = match.group(2).strip()
+            logger.info(f"Found main {filing_type} filing: {len(main_content):,} chars")
+            return main_content
+
+        # Fallback: find the largest non-exhibit document
+        document_pattern = r'<DOCUMENT>(.*?)</DOCUMENT>'
+        documents = re.findall(document_pattern, content, re.DOTALL | re.IGNORECASE)
+
+        largest_doc = ""
+        largest_size = 0
+
+        for doc in documents:
+            type_match = re.search(r'<TYPE>([^<]+)</TYPE>', doc, re.IGNORECASE)
+            if type_match:
+                doc_type = type_match.group(1).strip()
+                # Skip exhibits and graphics
+                if not doc_type.startswith('EX-') and doc_type != 'GRAPHIC':
+                    text_match = re.search(r'<TEXT>(.*?)</TEXT>', doc, re.DOTALL | re.IGNORECASE)
+                    if text_match:
+                        content_text = text_match.group(1)
+                        if len(content_text) > largest_size:
+                            largest_size = len(content_text)
+                            largest_doc = content_text
+
+        return largest_doc if largest_doc else None
+
+    def _process_main_filing_content(self, content: str) -> str:
+        """Process the main filing content to extract meaningful business text"""
+        import re
+
+        if not content:
+            return ""
+
+        # Look for HTML body content within XBRL
+        body_match = re.search(r'<body[^>]*>(.*?)</body>', content, re.DOTALL | re.IGNORECASE)
+        html_content = body_match.group(1) if body_match else content
+
+        # Parse with BeautifulSoup
+        soup = BeautifulSoup(html_content, 'html.parser')
+
+        # Remove metadata and non-content elements
+        for element in soup(['script', 'style', 'meta', 'link', 'title']):
+            element.decompose()
+
+        # Remove XBRL-specific hidden elements
+        for element in soup.find_all(attrs={'style': re.compile(r'display:\s*none', re.IGNORECASE)}):
+            element.decompose()
+
+        # Extract meaningful content sections
+        content_sections = []
+
+        # Extract tables (financial statements)
+        tables = soup.find_all('table')
+        for i, table in enumerate(tables):
+            table_text = table.get_text(separator=' ', strip=True)
+            if len(table_text) > 100:  # Only keep substantial tables
+                content_sections.append(f"=== TABLE {i+1} ===\n{table_text}")
+
+        # Extract div sections that contain substantial content
+        divs = soup.find_all('div')
+        for div in divs:
+            div_text = div.get_text(separator='\n', strip=True)
+            # Keep divs with substantial text that aren't pure data
+            if len(div_text) > 200 and len(div_text.split()) > 20:
+                # Check if it's not just XBRL metadata
+                if not re.match(r'^[\d\s\-\.%$,]+$', div_text):
+                    content_sections.append(div_text)
+
+        # Extract paragraphs
+        paragraphs = soup.find_all('p')
+        for p in paragraphs:
+            p_text = p.get_text(strip=True)
+            if len(p_text) > 50:  # Keep substantial paragraphs
+                content_sections.append(p_text)
+
+        # If we didn't find enough structured content, extract all text
+        if len(content_sections) < 5:
+            logger.warning("Limited structured content found, extracting all text")
+            all_text = soup.get_text(separator='\n')
+
+            # Clean up the text
+            lines = []
+            for line in all_text.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                # Skip pure XBRL metadata
+                if re.match(r'^(xbrl|us-gaap|dei|srt|aapl|tsla):[A-Za-z0-9]+$', line):
+                    continue
+                if re.match(r'^[\d\-]+$', line) and len(line) < 15:  # Skip pure date/number lines
+                    continue
+                if line in ['null', 'true', 'false']:
+                    continue
+                lines.append(line)
+
+            cleaned_text = '\n'.join(lines)
+            content_sections = [cleaned_text]
+
+        # Combine sections
+        full_content = '\n\n'.join(content_sections)
+        logger.info(f"Processed main filing content: {len(full_content):,} chars")
+
+        return full_content
 
     def _clean_plain_text(self, content: str) -> str:
         """Light cleaning for plain text files with token limit awareness"""
