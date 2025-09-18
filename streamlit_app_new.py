@@ -195,65 +195,293 @@ def create_basic_word_content(report):
         from docx import Document
         from docx.shared import Inches, Pt
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        
+
         # Create new document
         doc = Document()
-        
+
         # Add title
         title = doc.add_heading(report['title'], 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
+
         # Add generation date
         date_para = doc.add_paragraph(f"Generated on {report['generation_date']}")
         date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
+
         # Add page break
         doc.add_page_break()
-        
+
         # Add sections
         for i, section in enumerate(report['sections']):
             # Section heading
             doc.add_heading(f"{i+1}. {section['name']}", level=1)
-            
+
             # Section content
             content = section.get('content', 'No content available')
             paragraphs = content.split('\n\n')
-            
+
             for paragraph in paragraphs:
                 if paragraph.strip():
                     doc.add_paragraph(paragraph.strip())
-            
+
             # Add spacing
             doc.add_paragraph()
-        
+
         # Save to BytesIO
         from io import BytesIO
         word_buffer = BytesIO()
         doc.save(word_buffer)
         word_buffer.seek(0)
-        
+
         return word_buffer.getvalue()
-        
+
     except ImportError:
         # If python-docx is not available, create a simple text-based "Word" document
         content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
-        
+
         for i, section in enumerate(report['sections']):
             content += f"{i+1}. {section['name']}\n\n"
             content += f"{section.get('content', 'No content available')}\n\n"
             content += "-" * 50 + "\n\n"
-        
+
         return content.encode('utf-8')
-    
+
     except Exception as e:
         # Ultimate fallback - just return text content
         content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
-        
+
         for i, section in enumerate(report['sections']):
             content += f"{i+1}. {section['name']}\n\n"
             content += f"{section.get('content', 'No content available')}\n\n"
-        
+
         return content.encode('utf-8')
+
+@st.fragment
+def word_download_fragment(report):
+    """Fragment for Word document download - prevents full page reload"""
+    st.markdown("### 📄 Word Document")
+
+    include_validation_checked = st.checkbox("Include AI validation comments", value=True, key="word_validation_frag")
+
+    # Initialize word preparation state
+    if 'word_preparation_state' not in st.session_state:
+        st.session_state.word_preparation_state = 'ready'  # ready, preparing, prepared, error
+        st.session_state.word_download_data = None
+        st.session_state.word_preparation_logs = []
+
+    # Debug logging function
+    def log_debug(message):
+        timestamp = time.strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        st.session_state.word_preparation_logs.append(log_entry)
+        print(f"DEBUG: {log_entry}")  # Console logging
+
+    # Show current status and controls based on state
+    if st.session_state.word_preparation_state == 'ready':
+        st.info("💡 Ready to prepare Word document")
+
+        # Show debug logs if any exist
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=False):
+                for log_entry in st.session_state.word_preparation_logs[-5:]:  # Show last 5 logs
+                    st.text(log_entry)
+
+        if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word_frag"):
+            log_debug("User clicked Prepare Word Document button")
+            st.session_state.word_preparation_state = 'preparing'
+            st.rerun()
+
+    elif st.session_state.word_preparation_state == 'preparing':
+        st.warning("🔄 Preparing document... please wait")
+
+        # Show progress indicator
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        log_debug("Starting Word document preparation")
+
+        try:
+            status_text.text("🔄 Step 1/4: Calling backend export service...")
+            progress_bar.progress(0.1)
+            log_debug("About to call create_report_and_export_word()")
+
+            # First try advanced export through backend
+            export_result = create_report_and_export_word(report, include_validation_checked)
+            log_debug(f"Export result received: {export_result}")
+
+            status_text.text("📡 Step 2/4: Processing backend response...")
+            progress_bar.progress(0.3)
+
+            if export_result and not export_result.get('error'):
+                download_url = export_result.get('download_url')
+                log_debug(f"Download URL: {download_url}")
+
+                if download_url:
+                    status_text.text("⬇️ Step 3/4: Downloading Word document...")
+                    progress_bar.progress(0.6)
+                    log_debug("About to call download_word_document()")
+
+                    # Download the file content
+                    word_content = download_word_document(download_url)
+                    log_debug(f"Downloaded content size: {len(word_content) if word_content else 'None'}")
+
+                    if word_content:
+                        status_text.text("✅ Step 4/4: Finalizing document...")
+                        progress_bar.progress(0.9)
+
+                        filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
+                        st.session_state.word_download_data = {
+                            'content': word_content,
+                            'filename': filename,
+                            'type': 'advanced'
+                        }
+                        st.session_state.word_preparation_state = 'prepared'
+                        log_debug(f"Advanced Word document prepared successfully: {filename}")
+
+                        status_text.text("✅ Document ready!")
+                        progress_bar.progress(1.0)
+                    else:
+                        raise Exception("Failed to download generated document")
+                else:
+                    raise Exception("No download URL provided")
+            else:
+                error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
+                raise Exception(f"Backend export failed: {error_msg}")
+
+        except Exception as e:
+            log_debug(f"Advanced export failed: {str(e)}")
+
+            # Fallback to basic Word document
+            try:
+                status_text.text("🔄 Fallback: Creating basic Word document...")
+                progress_bar.progress(0.7)
+                log_debug("Trying basic Word document generation")
+
+                basic_word_content = create_basic_word_content(report)
+                log_debug(f"Basic content size: {len(basic_word_content) if basic_word_content else 'None'}")
+
+                st.session_state.word_download_data = {
+                    'content': basic_word_content,
+                    'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                    'type': 'basic'
+                }
+                st.session_state.word_preparation_state = 'prepared'
+                log_debug("Basic Word document prepared successfully")
+
+                status_text.text("✅ Basic document ready!")
+                progress_bar.progress(1.0)
+
+            except Exception as basic_error:
+                log_debug(f"Both advanced and basic document generation failed: {str(basic_error)}")
+                st.session_state.word_preparation_state = 'error'
+                st.session_state.word_error_details = {
+                    'advanced_error': str(e),
+                    'basic_error': str(basic_error)
+                }
+                status_text.text("❌ Document preparation failed")
+                progress_bar.progress(0)
+
+        # Auto-rerun to show the result after a brief delay
+        time.sleep(2)
+        st.rerun()
+
+    elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
+        # DOWNLOAD READY STATE - stays visible after clicking download
+        word_data = st.session_state.word_download_data
+        doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
+        file_size = len(word_data['content'])
+
+        st.success(f"✅ {doc_type} document ready!")
+        st.info(f"📄 {word_data['filename']} ({file_size/1024:.1f} KB)")
+
+        # Primary download button - PERSISTENT - NO RERUN
+        st.download_button(
+            label=f"📄 Download {doc_type} Document",
+            data=word_data['content'],
+            file_name=word_data['filename'],
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            key="download_word_fragment",
+            help="Ready for download! Click multiple times if needed."
+        )
+
+        # Show debug logs
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=False):
+                for log_entry in st.session_state.word_preparation_logs[-10:]:  # Show last 10 logs
+                    st.text(log_entry)
+
+        # Option to prepare new document (smaller button)
+        if st.button("🔄 Prepare New", use_container_width=True, key="prepare_new_word_frag"):
+            st.session_state.word_preparation_state = 'ready'
+            st.session_state.word_download_data = None
+            st.rerun()
+
+    elif st.session_state.word_preparation_state == 'error':
+        st.error("❌ Document preparation failed")
+
+        # Show error details if available
+        if hasattr(st.session_state, 'word_error_details'):
+            error_details = st.session_state.word_error_details
+            with st.expander("🔍 Error Details", expanded=True):
+                st.text("Advanced Export Error:")
+                st.code(error_details.get('advanced_error', 'Unknown error'))
+                st.text("Basic Export Error:")
+                st.code(error_details.get('basic_error', 'Unknown error'))
+
+        # Show debug logs
+        if st.session_state.word_preparation_logs:
+            with st.expander("🔍 Debug Logs", expanded=True):
+                for log_entry in st.session_state.word_preparation_logs:
+                    st.text(log_entry)
+
+        if st.button("🔄 Try Again", use_container_width=True, key="retry_word_frag"):
+            st.session_state.word_preparation_state = 'ready'
+            st.session_state.word_download_data = None
+            if hasattr(st.session_state, 'word_error_details'):
+                delattr(st.session_state, 'word_error_details')
+            st.rerun()
+
+@st.fragment
+def text_download_fragment(report):
+    """Fragment for Text document download - prevents full page reload"""
+    st.markdown("### 📝 Text Format")
+
+    report_text = f"# {report['title']}\n\n"
+    report_text += f"Generated on {report['generation_date']}\n\n"
+
+    for i, section in enumerate(report['sections']):
+        report_text += f"## {i+1}. {section['name']}\n\n"
+        report_text += f"{section['content']}\n\n"
+
+    text_size = len(report_text.encode('utf-8'))
+    st.info(f"📄 Text file ({text_size/1024:.1f} KB)")
+
+    st.download_button(
+        label="📝 Download as Text",
+        data=report_text,
+        file_name=f"{report['title'].replace(' ', '_')}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        help="Plain text format - works everywhere"
+    )
+
+@st.fragment
+def json_download_fragment(report):
+    """Fragment for JSON document download - prevents full page reload"""
+    st.markdown("### 📋 JSON Format")
+
+    report_json = json.dumps(report, indent=2)
+    json_size = len(report_json.encode('utf-8'))
+    st.info(f"📄 JSON file ({json_size/1024:.1f} KB)")
+
+    st.download_button(
+        label="📋 Download as JSON",
+        data=report_json,
+        file_name=f"{report['title'].replace(' ', '_')}.json",
+        mime="application/json",
+        use_container_width=True,
+        help="Structured data format - includes validation details"
+    )
 
 def main():
     st.title("📊 Credit Review Document System")
@@ -1317,148 +1545,16 @@ def show_generated_report(report):
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Word Document Download Section - ALWAYS VISIBLE
-        st.markdown("### 📄 Word Document")
-
-        include_validation = st.checkbox("Include AI validation comments", value=True, key="word_validation")
-
-        # Initialize word preparation state
-        if 'word_preparation_state' not in st.session_state:
-            st.session_state.word_preparation_state = 'ready'  # ready, preparing, prepared, error
-            st.session_state.word_download_data = None
-
-        # Show current status and controls based on state
-        if st.session_state.word_preparation_state == 'ready':
-            st.info("💡 Ready to prepare Word document")
-            if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word"):
-                st.session_state.word_preparation_state = 'preparing'
-                st.rerun()
-
-        elif st.session_state.word_preparation_state == 'preparing':
-            st.warning("🔄 Preparing document... please wait")
-            # The actual preparation logic will run and update the state
-
-        elif st.session_state.word_preparation_state == 'prepared' and st.session_state.word_download_data:
-            # DOWNLOAD READY STATE - stays visible after clicking download
-            word_data = st.session_state.word_download_data
-            doc_type = "Professional" if word_data['type'] == 'advanced' else "Basic"
-            file_size = len(word_data['content'])
-
-            st.success(f"✅ {doc_type} document ready!")
-            st.info(f"📄 {word_data['filename']} ({file_size/1024:.1f} KB)")
-
-            # Primary download button - PERSISTENT
-            st.download_button(
-                label=f"📄 Download {doc_type} Document",
-                data=word_data['content'],
-                file_name=word_data['filename'],
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-                key="download_word_persistent",
-                help="Ready for download! Click multiple times if needed."
-            )
-
-            # Option to prepare new document (smaller button)
-            if st.button("🔄 Prepare New", use_container_width=True, key="prepare_new_word"):
-                st.session_state.word_preparation_state = 'ready'
-                st.session_state.word_download_data = None
-                st.rerun()
-
-        elif st.session_state.word_preparation_state == 'error':
-            st.error("❌ Document preparation failed")
-            if st.button("🔄 Try Again", use_container_width=True, key="retry_word_simple"):
-                st.session_state.word_preparation_state = 'ready'
-                st.session_state.word_download_data = None
-                st.rerun()
-
-        # Handle the preparation process when state is 'preparing' - run once and update state
-        if st.session_state.word_preparation_state == 'preparing':
-            try:
-                # First try advanced export through backend
-                export_result = create_report_and_export_word(report, include_validation)
-
-                if export_result and not export_result.get('error'):
-                    download_url = export_result.get('download_url')
-                    if download_url:
-                        # Download the file content
-                        word_content = download_word_document(download_url)
-
-                        if word_content:
-                            filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
-                            st.session_state.word_download_data = {
-                                'content': word_content,
-                                'filename': filename,
-                                'type': 'advanced'
-                            }
-                            st.session_state.word_preparation_state = 'prepared'
-                        else:
-                            raise Exception("Failed to download generated document")
-                    else:
-                        raise Exception("No download URL provided")
-                else:
-                    error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
-                    raise Exception(f"Backend export failed: {error_msg}")
-
-            except Exception as e:
-                # Fallback to basic Word document
-                try:
-                    basic_word_content = create_basic_word_content(report)
-                    st.session_state.word_download_data = {
-                        'content': basic_word_content,
-                        'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
-                        'type': 'basic'
-                    }
-                    st.session_state.word_preparation_state = 'prepared'
-
-                except Exception as basic_error:
-                    st.session_state.word_preparation_state = 'error'
-                    st.session_state.word_error_details = {
-                        'advanced_error': str(e),
-                        'basic_error': str(basic_error)
-                    }
-
-            # Auto-rerun to show the result
-            st.rerun()
+        # Word Document Download Section using st.fragment - prevents full page reload
+        word_download_fragment(report)
     
     with col2:
-        # Text Download Section - ALWAYS VISIBLE
-        st.markdown("### 📝 Text Format")
-
-        report_text = f"# {report['title']}\n\n"
-        report_text += f"Generated on {report['generation_date']}\n\n"
-
-        for i, section in enumerate(report['sections']):
-            report_text += f"## {i+1}. {section['name']}\n\n"
-            report_text += f"{section['content']}\n\n"
-
-        text_size = len(report_text.encode('utf-8'))
-        st.info(f"📄 Text file ({text_size/1024:.1f} KB)")
-
-        st.download_button(
-            label="📝 Download as Text",
-            data=report_text,
-            file_name=f"{report['title'].replace(' ', '_')}.txt",
-            mime="text/plain",
-            use_container_width=True,
-            help="Plain text format - works everywhere"
-        )
+        # Text Download Section using st.fragment - prevents full page reload
+        text_download_fragment(report)
 
     with col3:
-        # JSON Download Section - ALWAYS VISIBLE
-        st.markdown("### 📋 JSON Format")
-
-        report_json = json.dumps(report, indent=2)
-        json_size = len(report_json.encode('utf-8'))
-        st.info(f"📄 JSON file ({json_size/1024:.1f} KB)")
-
-        st.download_button(
-            label="📋 Download as JSON",
-            data=report_json,
-            file_name=f"{report['title'].replace(' ', '_')}.json",
-            mime="application/json",
-            use_container_width=True,
-            help="Structured data format - includes validation details"
-        )
+        # JSON Download Section using st.fragment - prevents full page reload
+        json_download_fragment(report)
 
 if __name__ == "__main__":
     main()
