@@ -11,7 +11,8 @@ import structlog
 from datetime import datetime
 
 from app.core.config import settings
-from app.services.validation_system import ValidationIssue, ValidationSeverity
+# from app.services.validation_system import ValidationIssue, ValidationSeverity
+# Import removed to avoid dependency issues - validation types are used as dicts
 
 logger = structlog.get_logger(__name__)
 
@@ -22,7 +23,9 @@ class WordReportGenerator:
     def __init__(self):
         self.template_path = settings.WORD_TEMPLATE_PATH
         self.export_directory = Path(settings.EXPORT_DIRECTORY)
-        self.export_directory.mkdir(exist_ok=True)
+        # Ensure export directory exists with full permissions
+        self.export_directory.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Export directory initialized: {self.export_directory.absolute()}")
     
     async def generate_report(
         self,
@@ -293,18 +296,20 @@ class WordReportGenerator:
                 # Add comment as footnote annotation
                 comment_text = comment.get('text', '')
                 comment_type = comment.get('type', 'validation')
-                
-                footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
-                footnote_run.font.size = Pt(8)
-                footnote_run.font.italic = True
-                
-                # Color code the comment based on severity
-                if severity == 'high':
-                    footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
-                elif severity == 'medium':
-                    footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
-                else:
-                    footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
+
+                # Ensure comment text is not empty
+                if comment_text:
+                    footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
+                    footnote_run.font.size = Pt(8)
+                    footnote_run.font.italic = True
+
+                    # Color code the comment based on severity
+                    if severity == 'high':
+                        footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
+                    elif severity == 'medium':
+                        footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
+                    else:
+                        footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
             
             current_pos = end_pos
         

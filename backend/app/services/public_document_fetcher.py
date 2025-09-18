@@ -278,7 +278,7 @@ class PublicDocumentFetcher:
             logger.error("Error processing downloaded filings", error=str(e))
 
     async def _clean_edgar_file(self, file_path: str) -> str:
-        """Clean EDGAR XML/XBRL files to extract readable content"""
+        """Clean EDGAR XML/XBRL files to extract readable content with improved sectioning"""
         try:
             path_obj = Path(file_path)
 
@@ -286,20 +286,61 @@ class PublicDocumentFetcher:
             async with aiofiles.open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = await f.read()
 
-            # Check if it's XML/XBRL content
-            if self._is_xml_content(content):
-                logger.info(f"Cleaning XML/XBRL content from {file_path}")
-                cleaned_content = self._extract_text_from_xbrl(content)
+            logger.info(f"Processing EDGAR file: {file_path} ({len(content):,} chars)")
+
+            # SEC filings often contain multiple sections - handle them separately
+            sections = []
+
+            # Extract SEC header section (plain text)
+            if '<SEC-HEADER>' in content and '</SEC-HEADER>' in content:
+                header_start = content.find('<SEC-HEADER>')
+                header_end = content.find('</SEC-HEADER>') + len('</SEC-HEADER>')
+                header_content = content[header_start:header_end]
+
+                # Clean header content (remove tags but keep text)
+                header_cleaned = re.sub(r'<[^>]+>', '\n', header_content)
+                header_cleaned = re.sub(r'\n+', '\n', header_cleaned)
+                sections.append("=== SEC FILING HEADER ===\n" + header_cleaned.strip())
+                logger.info("Extracted SEC header section")
+
+            # Extract XBRL/HTML sections
+            if '<XBRL>' in content or '<html' in content.lower():
+                logger.info("Detected mixed content - extracting XBRL sections")
+
+                # Find XBRL content sections
+                xbrl_sections = re.findall(r'<XBRL>.*?</XBRL>|<html.*?</html>', content, re.DOTALL | re.IGNORECASE)
+
+                for i, xbrl_section in enumerate(xbrl_sections[:3]):  # Limit to first 3 sections
+                    logger.info(f"Processing XBRL section {i+1}/{min(3, len(xbrl_sections))}")
+                    cleaned_xbrl = self._extract_text_from_xbrl(xbrl_section)
+                    if cleaned_xbrl.strip():
+                        sections.append(f"=== XBRL SECTION {i+1} ===\n" + cleaned_xbrl)
+
+            # If no structured content found, try whole document
+            if not sections:
+                logger.info("No structured sections found - processing entire document")
+                if self._is_xml_content(content):
+                    logger.info("Detected XML/XBRL content - applying deep cleaning")
+                    cleaned_content = self._extract_text_from_xbrl(content)
+                else:
+                    logger.info("Detected plain text - applying light cleaning")
+                    cleaned_content = self._clean_plain_text(content)
             else:
-                logger.info(f"File appears to be plain text, minimal cleaning: {file_path}")
-                cleaned_content = self._clean_plain_text(content)
+                # Combine sections
+                cleaned_content = '\n\n'.join(sections)
+
+                # Apply token limit safety
+                MAX_CHARS = 8192 * 3  # Conservative estimate to stay under token limit
+                if len(cleaned_content) > MAX_CHARS:
+                    logger.warning(f"Content length {len(cleaned_content)} exceeds safe limit, truncating")
+                    cleaned_content = cleaned_content[:MAX_CHARS] + "\n\n[Content truncated due to length]"
 
             # Create cleaned file
             cleaned_file_path = str(path_obj.parent / f"{path_obj.stem}_cleaned.txt")
             async with aiofiles.open(cleaned_file_path, 'w', encoding='utf-8') as f:
                 await f.write(cleaned_content)
 
-            logger.info(f"Cleaned file saved: {cleaned_file_path}")
+            logger.info(f"Cleaned file saved: {cleaned_file_path} ({len(cleaned_content):,} chars, {((len(content) - len(cleaned_content)) / len(content) * 100):.1f}% reduction)")
             return cleaned_file_path
 
         except Exception as e:
@@ -314,7 +355,7 @@ class PublicDocumentFetcher:
         ])
 
     def _extract_text_from_xbrl(self, content: str) -> str:
-        """Extract readable text from XBRL/XML content"""
+        """Extract readable text from XBRL/XML content with enhanced TSLA-specific cleaning"""
         try:
             # Use BeautifulSoup to parse XML/HTML
             soup = BeautifulSoup(content, 'html.parser')
@@ -323,13 +364,34 @@ class PublicDocumentFetcher:
             for element in soup(['script', 'style', 'meta', 'link', 'title']):
                 element.decompose()
 
-            # Remove XBRL-specific elements that don't contain useful text
+            # Remove XBRL-specific elements that don't contain useful text (enhanced list)
             xbrl_noise_tags = [
                 'xbrl', 'context', 'unit', 'schemaref', 'linkbaseref',
-                'roleref', 'arcroleref', 'footnotelink', 'loc', 'footnote'
+                'roleref', 'arcroleref', 'footnotelink', 'loc', 'footnote',
+                # Additional XBRL metadata tags that create noise
+                'xbrldi:explicitmember', 'xbrldi:typedmember', 'xlink:loc',
+                'xlink:arc', 'link:presentationlink', 'link:calculationlink',
+                'link:definitionlink', 'link:labellink', 'xsd:schema',
+                'xsd:element', 'xsd:complextype', 'xsd:sequence'
             ]
             for tag in xbrl_noise_tags:
                 for element in soup.find_all(tag):
+                    element.decompose()
+
+            # Remove elements with specific XBRL attributes that contain metadata
+            for element in soup.find_all(attrs={'contextref': True}):
+                if not element.get_text(strip=True):
+                    element.decompose()
+
+            # Remove elements with XBRL namespace URIs in their text
+            for element in soup.find_all():
+                text_content = element.get_text(strip=True)
+                if any(noise in text_content for noise in [
+                    'http://fasb.org/us-gaap/',
+                    'http://www.tesla.com/role/',
+                    'xbritype', 'nsuri', 'localname',
+                    'auth_ref', 'presentation'
+                ]):
                     element.decompose()
 
             # Extract text content
@@ -344,8 +406,11 @@ class PublicDocumentFetcher:
             return self._simple_xml_clean(content)
 
     def _simple_xml_clean(self, content: str) -> str:
-        """Simple regex-based XML cleaning as fallback"""
+        """Simple regex-based XML cleaning as fallback with enhanced XBRL handling"""
         import re
+
+        # Remove XBRL namespace declarations first
+        content = re.sub(r'xmlns:[^=]*="[^"]*"', '', content)
 
         # Remove XML tags
         content = re.sub(r'<[^>]+>', ' ', content)
@@ -356,12 +421,46 @@ class PublicDocumentFetcher:
         # Remove CDATA sections
         content = re.sub(r'<!\[CDATA\[.*?\]\]>', '', content, flags=re.DOTALL)
 
+        # Remove common XBRL noise patterns that survive tag removal
+        xbrl_noise = [
+            r'contextref="[^"]*"',
+            r'unitref="[^"]*"',
+            r'decimals="[^"]*"',
+            r'scale="[^"]*"',
+            r'us-gaap:[A-Za-z0-9]+',
+            r'dei:[A-Za-z0-9]+',
+        ]
+
+        for pattern in xbrl_noise:
+            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+
         # Clean up the text
         return self._clean_extracted_text(content)
 
     def _clean_extracted_text(self, text: str) -> str:
-        """Clean and normalize extracted text"""
+        """Clean and normalize extracted text with enhanced XBRL noise removal"""
         import re
+
+        # Remove XBRL-specific noise patterns first
+        # Remove lines containing only technical metadata
+        noise_patterns = [
+            r'"auth_ref":\s*\[.*?\]',
+            r'"xbritype":\s*".*?"',
+            r'"nsuri":\s*".*?"',
+            r'"localname":\s*".*?"',
+            r'"presentation":\s*\[.*?\]',
+            r'http://fasb\.org/us-gaap/\d+',
+            r'http://www\.tesla\.com/role/.*?"',
+            r'us-gaap_[A-Za-z]+Lineltems',
+            r'\["en-us":\s*\d+',
+            r'#role"[.\s]*',
+            r'Examples include, but are not limited to,.*?\"\s*\|\s*\d+\)',
+            r'stringitemType.*?Detail"',
+            r'PropertyPlantandEquipmentNetSchedule.*?Detail',
+        ]
+
+        for pattern in noise_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
 
         # Normalize whitespace
         text = re.sub(r'\s+', ' ', text)
@@ -369,12 +468,42 @@ class PublicDocumentFetcher:
         # Remove excessive blank lines
         text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
 
-        # Remove very short lines (likely noise)
+        # Split into lines for more balanced cleaning
         lines = text.split('\n')
         cleaned_lines = []
+
         for line in lines:
             line = line.strip()
-            if len(line) > 3:  # Keep lines with more than 3 characters
+
+            # Skip very short lines (likely noise) but be less aggressive
+            if len(line) <= 1:
+                continue
+
+            # Skip lines that are primarily punctuation or noise (but allow some content)
+            if re.match(r'^[\[\]{}"\',\s|:]+$', line):
+                continue
+
+            # Skip lines that contain mostly technical identifiers (but be more permissive)
+            if re.search(r'["\[\]{}|:]{5,}', line):  # Increased threshold
+                continue
+
+            # Be more permissive with numerical content - only skip if extremely low text ratio
+            alpha_count = sum(c.isalpha() for c in line)
+            if len(line) > 50 and alpha_count / len(line) < 0.15:  # Much more permissive
+                continue
+
+            # Keep content that looks like business text
+            if any(keyword in line.lower() for keyword in [
+                'tesla', 'company', 'revenue', 'income', 'cash', 'business',
+                'automotive', 'energy', 'quarter', 'year', 'segment', 'operations',
+                'assets', 'liabilities', 'equity', 'sales', 'costs', 'expenses',
+                'apple', 'aapl', 'tsla', 'financial', 'statements', 'certify'
+            ]):
+                cleaned_lines.append(line)
+                continue
+
+            # Keep lines with reasonable content length and text ratio
+            if len(line) >= 5 and (len(line) <= 20 or alpha_count / len(line) >= 0.25):
                 cleaned_lines.append(line)
 
         # Remove duplicate consecutive lines
@@ -388,11 +517,21 @@ class PublicDocumentFetcher:
         return '\n'.join(final_lines).strip()
 
     def _clean_plain_text(self, content: str) -> str:
-        """Light cleaning for plain text files"""
-        # Just normalize whitespace and remove excessive blank lines
+        """Light cleaning for plain text files with token limit awareness"""
         import re
+
+        # Normalize whitespace and remove excessive blank lines
         content = re.sub(r'\s+', ' ', content)
         content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+
+        # If content is extremely long, apply basic truncation to prevent token issues
+        # Rough estimate: 1 token ≈ 4 characters for English text
+        MAX_CHARS = 8192 * 3  # Conservative estimate to stay under token limit
+
+        if len(content) > MAX_CHARS:
+            logger.warning(f"Content length {len(content)} exceeds safe limit, truncating to {MAX_CHARS} chars")
+            content = content[:MAX_CHARS] + "\n\n[Content truncated due to length]"
+
         return content.strip()
 
     async def _process_downloaded_file(
