@@ -206,10 +206,14 @@ This is page {page_num + 1} of {max_pages} from a PDF document ({file_path.name}
 Please extract all text content from this page while maintaining structure and context.
 
 Focus on:
-1. Preserving section headers and titles
+1. Preserving section headers and titles (TRANSLATE TO ENGLISH if in foreign language)
 2. Maintaining paragraph structure
-3. Including all numerical data and tables
+3. Including all numerical data and tables (with English labels and descriptions)
 4. Noting page references when relevant
+5. CONVERT ALL TEXT TO ENGLISH - translate any foreign language content while preserving meaning
+6. For company names or proper nouns, keep original with English translation in brackets if needed
+
+LANGUAGE REQUIREMENT: Output must be in English only, regardless of source language.
 """
 
                                 # Process page with Sonnet
@@ -289,6 +293,11 @@ Focus on:
 2. Organizing into logical sections
 3. Preserving all important information
 4. Improving readability while maintaining accuracy
+5. TRANSLATE TO ENGLISH - If the text contains any foreign language content, convert it to English
+6. Use professional business English throughout
+7. For technical terms or proper nouns, provide English equivalents
+
+CRITICAL: Output must be in English only. Translate any non-English content while preserving meaning and context.
 """
 
                 response = await bedrock_service.generate_text(
@@ -328,6 +337,9 @@ For Word documents, try: Save As → PDF → Upload again with Sonnet fallback!
             # Clean and format extracted text
             extracted_text = self._clean_extracted_text(extracted_text)
 
+            # Additional English verification and translation if needed
+            extracted_text = await self._ensure_english_output(extracted_text)
+
             return extracted_text
 
         except Exception as e:
@@ -347,6 +359,16 @@ For Word documents, try: Save As → PDF → Upload again with Sonnet fallback!
 6. Remove any artifacts from PDF conversion or OCR errors
 7. Structure the output in clear, well-organized sections
 
+CRITICAL LANGUAGE REQUIREMENT:
+🌍 **ALWAYS OUTPUT IN ENGLISH ONLY** 🌍
+- If the source document is in a foreign language (Spanish, Chinese, French, German, Japanese, Korean, etc.), TRANSLATE all content to English
+- Preserve the original meaning and context while converting to English
+- For proper nouns, company names, and technical terms, provide the original term followed by English translation in brackets if needed
+- Ensure all headers, paragraphs, financial data, and technical content are in English
+- If you detect any non-English text, convert it to clear, professional English
+- Maintain technical accuracy during translation
+- Use professional business English terminology
+
 """
 
         # Add mode-specific instructions
@@ -358,26 +380,30 @@ SPECIAL FOCUS ON FINANCIAL CONTENT:
 - Include financial ratios, percentages, and calculations
 - Extract key financial metrics and performance indicators
 - Maintain the relationship between financial line items
+- TRANSLATE all financial terminology to English (e.g., "收入" → "Revenue", "资产负债表" → "Balance Sheet")
+- Convert currency names to English (e.g., "人民币" → "Chinese Yuan (CNY)", "euros" → "Euros (EUR)")
 
 """
         elif processing_mode == "legal":
             base_prompt += """
 SPECIAL FOCUS ON LEGAL CONTENT:
-- Preserve exact legal language and terminology
+- Preserve exact legal language and terminology, but TRANSLATE to English
 - Maintain clause numbering and section references
-- Extract all legal obligations, rights, and conditions
-- Include definitions and legal interpretations
+- Extract all legal obligations, rights, and conditions in English
+- Include definitions and legal interpretations translated to English
 - Preserve document structure for legal validity
+- For legal terms, provide English translation with original term in brackets when significant
 
 """
         elif processing_mode == "comprehensive":
             base_prompt += """
 COMPREHENSIVE EXTRACTION:
-- Extract all content regardless of type
-- Include headers, footers, and metadata
+- Extract all content regardless of type, CONVERTED TO ENGLISH
+- Include headers, footers, and metadata in English
 - Preserve document structure and hierarchy
-- Include any embedded charts or figure descriptions
-- Extract both primary content and supplementary information
+- Include any embedded charts or figure descriptions in English
+- Extract both primary content and supplementary information in English
+- Translate section headers, captions, and all text elements to English
 
 """
 
@@ -423,12 +449,23 @@ OUTPUT FORMAT:
 Provide the extracted text in a clean, well-structured format with clear section breaks.
 Use markdown-style headers (# ## ###) to organize content hierarchically.
 Separate different sections with clear breaks.
+
+FINAL LANGUAGE CHECK:
+Before providing your response, verify that ALL content is in English:
+- All headers and titles are in English
+- All paragraph content is in English
+- All table headers and data descriptions are in English
+- All technical terms are in English (with original terms in brackets if needed)
+- Currency and financial terms are in English
+- No foreign language characters or text remain
+
+Remember: The end user requires English-only output for integration into an English-language RAG system.
 """
 
         return base_prompt
 
     def _clean_extracted_text(self, text: str) -> str:
-        """Clean and format extracted text"""
+        """Clean and format extracted text, ensuring English output"""
 
         # Remove excessive whitespace
         import re
@@ -441,10 +478,18 @@ Separate different sections with clear breaks.
             'File Type:',
             'File:',
             'Please analyze and extract text from this document',
+            'TRANSLATE TO ENGLISH',
+            'LANGUAGE REQUIREMENT:',
+            'Output must be in English only',
         ]
 
         for artifact in artifacts:
             text = text.replace(artifact, '')
+
+        # Check for potential foreign language content and log warning
+        foreign_chars_pattern = r'[\u4e00-\u9fff\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u3040-\u309f\u30a0-\u30ff]'
+        if re.search(foreign_chars_pattern, text):
+            logger.warning("Detected potential foreign language characters in extracted text - may need additional translation")
 
         # Clean up the beginning and end
         text = text.strip()
@@ -453,7 +498,77 @@ Separate different sections with clear breaks.
         paragraphs = text.split('\n\n')
         cleaned_paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
-        return '\n\n'.join(cleaned_paragraphs)
+        cleaned_text = '\n\n'.join(cleaned_paragraphs)
+
+        # Add language verification log
+        if len(cleaned_text) > 0:
+            sample = cleaned_text[:200] + "..." if len(cleaned_text) > 200 else cleaned_text
+            logger.info("Sonnet text extraction completed",
+                       text_length=len(cleaned_text),
+                       sample_content=sample,
+                       foreign_chars_detected=bool(re.search(foreign_chars_pattern, cleaned_text)))
+
+        return cleaned_text
+
+    async def _ensure_english_output(self, text: str) -> str:
+        """Secondary pass to ensure English output if foreign language detected"""
+
+        import re
+
+        # Pattern to detect common foreign language scripts
+        foreign_chars_pattern = r'[\u4e00-\u9fff\u0400-\u04ff\u0590-\u05ff\u0600-\u06ff\u3040-\u309f\u30a0-\u30ff]'
+
+        # Check if foreign language characters are present
+        foreign_chars_found = re.search(foreign_chars_pattern, text)
+
+        if not foreign_chars_found:
+            # No foreign characters detected, return as is
+            logger.info("Text verification passed - English content confirmed")
+            return text
+
+        # Foreign language detected - perform additional translation
+        logger.warning("Foreign language characters detected, performing additional translation pass")
+
+        try:
+            translation_prompt = """
+The following text appears to contain foreign language content mixed with English. Please:
+
+1. TRANSLATE all non-English content to English
+2. Preserve the document structure and formatting
+3. Keep all numerical data and technical information accurate
+4. For company names or proper nouns, provide English translation with original in brackets
+5. Ensure the final output is 100% English
+
+Text to translate:
+
+""" + text + """
+
+CRITICAL: Output must be completely in English. Do not include any foreign language characters in your response.
+"""
+
+            response = await bedrock_service.generate_text(
+                prompt=translation_prompt,
+                max_tokens=4000,
+                temperature=0.1  # Low temperature for accurate translation
+            )
+
+            if response and response.get("content"):
+                translated_text = response["content"]
+
+                # Verify translation worked
+                if re.search(foreign_chars_pattern, translated_text):
+                    logger.warning("Translation pass still contains foreign characters, using original with warning")
+                    return f"[WARNING: This document contained foreign language content that may not be fully translated]\n\n{text}"
+                else:
+                    logger.info("Translation pass successful - foreign language content converted to English")
+                    return translated_text
+            else:
+                logger.error("Translation API call failed, returning original text with warning")
+                return f"[WARNING: This document contained foreign language content that could not be translated]\n\n{text}"
+
+        except Exception as e:
+            logger.error("Error during additional translation pass", error=str(e))
+            return f"[WARNING: This document contained foreign language content - translation failed: {str(e)}]\n\n{text}"
 
     async def _create_chunks_from_text(
         self,
