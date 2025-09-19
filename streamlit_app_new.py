@@ -865,7 +865,48 @@ def word_download_fragment(report):
                 delattr(st.session_state, 'word_error_details')
             st.rerun()
 
-# Old word_download_section function removed - replaced with integrated persistent download logic
+def create_minimal_word_document(report):
+    """Create a minimal Word document as ultimate fallback"""
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from io import BytesIO
+
+        doc = Document()
+
+        # Add title
+        title_para = doc.add_heading(report['title'], 0)
+
+        # Add date
+        date_para = doc.add_paragraph(f"Generated on {report['generation_date']}")
+        date_para.runs[0].font.italic = True
+
+        # Add sections
+        for i, section in enumerate(report['sections']):
+            doc.add_heading(f"{i+1}. {section['name']}", level=1)
+            doc.add_paragraph(section.get('content', 'No content available'))
+            doc.add_paragraph()  # spacing
+
+        # Save to bytes
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+
+        return buffer.getvalue()
+
+    except ImportError:
+        # If python-docx not available, create text content
+        content = f"{report['title']}\n\nGenerated on {report['generation_date']}\n\n"
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n{section.get('content', 'No content available')}\n\n"
+        return content.encode('utf-8')
+    except Exception:
+        # Ultimate fallback - basic text
+        content = f"{report['title']}\n\nMinimal fallback document\n\n"
+        for i, section in enumerate(report['sections']):
+            content += f"{i+1}. {section['name']}\n\n"
+        return content.encode('utf-8')
+
 def main():
     st.title("📊 Credit Review Document System")
     
@@ -1470,7 +1511,7 @@ def show_report_generation_page():
     # Initialize segments in session state
     if "segments" not in st.session_state:
         st.session_state.segments = [
-            {'name':x,"prompt":y} for x,y in default_prompt.default_section_prompt.items()
+            {'name':x,"prompt":y} for x,y in default_prompt.default_section_prompts.items()
         ]
     
     # Add/Edit segments
@@ -1925,15 +1966,16 @@ def show_generated_report(report):
         # Final section separator
         st.markdown("---")
     
-    # Download options - ALWAYS VISIBLE AND PERSISTENT
+    # Download options - ALWAYS VISIBLE AND PERSISTENT (NO RERUNS)
     st.subheader("💾 Download Report")
 
-    # Create download data in session state if not exists
-    if 'download_data_initialized' not in st.session_state:
-        st.session_state.download_data_initialized = True
+    # Initialize session state for word downloads only once
+    if 'word_download_data' not in st.session_state:
         st.session_state.word_download_data = None
+    if 'word_generation_status' not in st.session_state:
+        st.session_state.word_generation_status = 'ready'  # ready, generating, success, error
 
-    # Always show all three download options side by side
+    # Always show all three download options side by side - NO CONDITIONAL RENDERING
     col1, col2, col3 = st.columns(3)
 
     # === WORD DOCUMENT COLUMN ===
@@ -1941,147 +1983,123 @@ def show_generated_report(report):
         st.markdown("### 📄 Word Document")
 
         # Validation checkbox - always visible
-        include_validation = st.checkbox("Include AI validation comments", value=True, key="word_validation_persistent")
+        include_validation = st.checkbox("Include AI validation comments", value=True, key="word_validation_main")
 
-        # Check if Word document is ready
+        # Generation button - always show when no document is ready
+        if not st.session_state.word_download_data:
+            if st.button("📄 Generate Word Document", type="primary", use_container_width=True, key="generate_word_final"):
+                # Generate within spinner - NO RERUN NEEDED
+                with st.spinner("🔄 Generating Word document..."):
+                    try:
+                        # Method 1: Try direct generation first
+                        direct_result = create_direct_word_document(report, include_validation)
+
+                        if direct_result and not direct_result.get('error'):
+                            st.session_state.word_download_data = {
+                                'content': direct_result['content'],
+                                'filename': direct_result['filename'],
+                                'type': 'direct'
+                            }
+                            st.session_state.word_generation_status = 'success'
+                        else:
+                            # Method 2: Try basic generation
+                            basic_content = create_basic_word_content_with_comments(report, include_validation)
+                            if basic_content:
+                                st.session_state.word_download_data = {
+                                    'content': basic_content,
+                                    'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
+                                    'type': 'basic'
+                                }
+                                st.session_state.word_generation_status = 'success'
+                            else:
+                                st.session_state.word_generation_status = 'error'
+
+                    except Exception as e:
+                        # Final fallback - create minimal document
+                        try:
+                            minimal_content = create_minimal_word_document(report)
+                            st.session_state.word_download_data = {
+                                'content': minimal_content,
+                                'filename': f"{report['title'].replace(' ', '_')}_minimal.docx",
+                                'type': 'minimal'
+                            }
+                            st.session_state.word_generation_status = 'success'
+                        except Exception as fallback_error:
+                            st.session_state.word_generation_status = 'error'
+                            st.error(f"Word generation failed: {str(e)}")
+                            st.error(f"Fallback also failed: {str(fallback_error)}")
+
+                # Show success message and continue to download section below
+                if st.session_state.word_download_data:
+                    st.success("✅ Word document generated successfully!")
+
+        # Download section - ALWAYS visible if document exists
         if st.session_state.word_download_data:
-            # Word document is ready - show download button
             word_data = st.session_state.word_download_data
-            doc_type_mapping = {
-                'advanced': 'Professional (Backend)',
-                'direct': 'Professional (Direct)',
-                'basic': 'Basic'
-            }
-            doc_type = doc_type_mapping.get(word_data['type'], 'Basic')
+            doc_type = word_data.get('type', 'Basic')
             file_size = len(word_data['content'])
 
-            st.success(f"✅ {doc_type} ready!")
-            st.info(f"📄 {word_data['filename']} ({file_size/1024:.1f} KB)")
+            # Show document info
+            st.info(f"📄 {doc_type.title()} document ready: {word_data['filename']} ({file_size/1024:.1f} KB)")
 
-            # Main download button - ALWAYS VISIBLE
+            # Download button - PERSISTENT
             st.download_button(
-                label=f"📄 Download {doc_type}",
+                label=f"📄 Download Word Document",
                 data=word_data['content'],
                 file_name=word_data['filename'],
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
-                key="download_word_persistent",
-                help="Click to download - button stays available!"
+                key="download_word_final",
+                help="Download Word document - always available!"
             )
 
-            # Small button to regenerate
-            if st.button("🔄 Regenerate", use_container_width=True, key="regenerate_word"):
+            # Clear/regenerate button - NO RERUN
+            if st.button("🔄 Generate New Document", use_container_width=True, key="regenerate_word_final"):
                 st.session_state.word_download_data = None
-                st.rerun()
-        else:
-            # No Word document ready - show preparation button
-            st.info("💡 Ready to prepare Word document")
-
-            if st.button("📄 Prepare Word Document", type="primary", use_container_width=True, key="prepare_word_persistent"):
-                # Use a placeholder for the spinner and progress
-                progress_placeholder = st.empty()
-
-                with progress_placeholder:
-                    with st.spinner("🔄 Preparing Word document..."):
-                        try:
-                            # Try to generate Word document
-                            export_result = create_report_and_export_word(report, include_validation)
-
-                            if export_result and not export_result.get('error'):
-                                # Check if direct generation or backend generation
-                                if export_result.get('content'):
-                                    # Direct generation success
-                                    filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
-                                    st.session_state.word_download_data = {
-                                        'content': export_result['content'],
-                                        'filename': filename,
-                                        'type': 'direct'
-                                    }
-                                    progress_placeholder.success("✅ Word document ready!")
-                                    st.rerun()
-
-                                elif export_result.get('download_url'):
-                                    # Backend generation - download content
-                                    word_content = download_word_document(export_result['download_url'])
-                                    if word_content:
-                                        filename = export_result.get('filename', f"{report['title'].replace(' ', '_')}.docx")
-                                        st.session_state.word_download_data = {
-                                            'content': word_content,
-                                            'filename': filename,
-                                            'type': 'advanced'
-                                        }
-                                        progress_placeholder.success("✅ Word document ready!")
-                                        st.rerun()
-                                    else:
-                                        raise Exception("Failed to download document")
-                                else:
-                                    raise Exception("No content or download URL in response")
-                            else:
-                                error_msg = export_result.get('error', 'Unknown error') if export_result else 'No response'
-                                raise Exception(f"Export failed: {error_msg}")
-
-                        except Exception as e:
-                            # Fallback to basic Word generation
-                            try:
-                                basic_content = create_basic_word_content_with_comments(report, include_validation)
-                                if basic_content:
-                                    filename = f"{report['title'].replace(' ', '_')}_basic.docx"
-                                    st.session_state.word_download_data = {
-                                        'content': basic_content,
-                                        'filename': filename,
-                                        'type': 'basic'
-                                    }
-                                    progress_placeholder.success("✅ Basic Word document ready!")
-                                    st.rerun()
-                                else:
-                                    progress_placeholder.error(f"❌ Word generation failed: {str(e)}")
-                            except Exception as fallback_error:
-                                progress_placeholder.error(f"❌ Both advanced and basic generation failed: {str(fallback_error)}")
+                st.session_state.word_generation_status = 'ready'
+                st.info("✨ Ready to generate a new document - click 'Generate Word Document' above")
 
     # === TEXT DOCUMENT COLUMN ===
     with col2:
         st.markdown("### 📝 Text Document")
 
-        # Generate text content
-        report_text = f"# {report['title']}\n\n"
-        report_text += f"Generated on {report['generation_date']}\n\n"
-
+        # Generate text content - always available
+        report_text = f"# {report['title']}\n\nGenerated on {report['generation_date']}\n\n"
         for i, section in enumerate(report['sections']):
-            report_text += f"## {i+1}. {section['name']}\n\n"
-            report_text += f"{section['content']}\n\n"
+            report_text += f"## {i+1}. {section['name']}\n\n{section['content']}\n\n"
 
         text_size = len(report_text.encode('utf-8'))
-        st.info(f"📄 Text file ({text_size/1024:.1f} KB)")
+        st.info(f"📄 Ready ({text_size/1024:.1f} KB)")
 
-        # Text download button - ALWAYS VISIBLE
+        # Text download - ALWAYS AVAILABLE
         st.download_button(
-            label="📝 Download as Text",
+            label="📝 Download Text",
             data=report_text,
             file_name=f"{report['title'].replace(' ', '_')}.txt",
             mime="text/plain",
             use_container_width=True,
-            key="download_text_persistent",
-            help="Plain text format - always available!"
+            key="download_text_final",
+            help="Plain text format"
         )
 
     # === JSON DOCUMENT COLUMN ===
     with col3:
         st.markdown("### 📋 JSON Document")
 
-        # Generate JSON content
+        # Generate JSON content - always available
         report_json = json.dumps(report, indent=2)
         json_size = len(report_json.encode('utf-8'))
-        st.info(f"📄 JSON file ({json_size/1024:.1f} KB)")
+        st.info(f"📄 Ready ({json_size/1024:.1f} KB)")
 
-        # JSON download button - ALWAYS VISIBLE
+        # JSON download - ALWAYS AVAILABLE
         st.download_button(
-            label="📋 Download as JSON",
+            label="📋 Download JSON",
             data=report_json,
             file_name=f"{report['title'].replace(' ', '_')}.json",
             mime="application/json",
             use_container_width=True,
-            key="download_json_persistent",
-            help="Structured data with validation details - always available!"
+            key="download_json_final",
+            help="Structured data format"
         )
 
 if __name__ == "__main__":
