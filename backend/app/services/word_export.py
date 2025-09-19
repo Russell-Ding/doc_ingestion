@@ -316,23 +316,36 @@ class WordReportGenerator:
                 else:
                     comment_run.font.highlight_color = WD_COLOR_INDEX.BLUE
                 
-                # Add comment as footnote annotation
+                # Add comment to the highlighted text
                 comment_text = comment.get('text', '')
                 comment_type = comment.get('type', 'validation')
 
                 # Ensure comment text is not empty
                 if comment_text:
-                    footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
-                    footnote_run.font.size = Pt(8)
-                    footnote_run.font.italic = True
+                    # Create a Word comment attached to the highlighted run
+                    full_comment_text = f"AI Validation - {comment_type.title()}: {comment_text}"
+                    author = f"AI Validator ({severity.title()})"
 
-                    # Color code the comment based on severity
-                    if severity == 'high':
-                        footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
-                    elif severity == 'medium':
-                        footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
-                    else:
-                        footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
+                    # Add the comment to the document attached to the highlighted run
+                    try:
+                        doc_comment = paragraph._parent.add_comment(
+                            runs=comment_run,
+                            text=full_comment_text,
+                            author=author
+                        )
+                    except Exception as e:
+                        # Fallback to inline annotation if comment creation fails
+                        footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
+                        footnote_run.font.size = Pt(8)
+                        footnote_run.font.italic = True
+
+                        # Color code the comment based on severity
+                        if severity == 'high':
+                            footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
+                        elif severity == 'medium':
+                            footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
+                        else:
+                            footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
             
             current_pos = end_pos
         
@@ -340,14 +353,37 @@ class WordReportGenerator:
         if current_pos < len(content):
             paragraph.add_run(content[current_pos:])
         
-        # Add paragraph-level validation summary if there are comments
+        # Add paragraph-level validation summary as a comment if there are comments
         if relevant_comments:
-            validation_summary_run = paragraph.add_run(
-                f"\n[Paragraph Validation: {len(relevant_comments)} issue(s) identified]"
-            )
-            validation_summary_run.font.size = Pt(9)
-            validation_summary_run.font.italic = True
-            validation_summary_run.font.color.rgb = RGBColor(102, 102, 102)
+            # Create a summary run for the comment to attach to
+            summary_text = f"Paragraph validation summary: {len(relevant_comments)} issue(s) identified"
+            summary_details = []
+
+            for comment in relevant_comments:
+                severity = comment.get('severity', 'medium')
+                issue_type = comment.get('type', 'validation')
+                summary_details.append(f"• {severity.title()} {issue_type}: {comment.get('text', 'No details')}")
+
+            full_summary = summary_text + "\n\nDetails:\n" + "\n".join(summary_details)
+
+            # Create an invisible run to attach the paragraph comment to
+            summary_run = paragraph.add_run("")
+
+            # Add paragraph-level comment
+            try:
+                paragraph._parent.add_comment(
+                    runs=summary_run,
+                    text=full_summary,
+                    author="AI Paragraph Validator"
+                )
+            except Exception:
+                # Fallback to inline text if comment creation fails
+                validation_summary_run = paragraph.add_run(
+                    f"\n[Paragraph Validation: {len(relevant_comments)} issue(s) identified]"
+                )
+                validation_summary_run.font.size = Pt(9)
+                validation_summary_run.font.italic = True
+                validation_summary_run.font.color.rgb = RGBColor(102, 102, 102)
     
     def _add_validation_summary_box(
         self,
