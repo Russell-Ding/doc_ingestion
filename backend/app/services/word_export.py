@@ -271,10 +271,12 @@ class WordReportGenerator:
         
         # Find comments that apply to this paragraph content
         relevant_comments = []
+        general_comments = []  # Comments without specific text spans
+
         for comment in word_comments:
             # Try to get text span from different possible fields
             text_span = comment.get('text_span', comment.get('text', ''))
-            
+
             # If we have a text span and it's in this paragraph content
             if text_span and text_span.strip() in content:
                 # Find the position of this text span in the current paragraph
@@ -285,116 +287,116 @@ class WordReportGenerator:
                     relevant_comment['end'] = start_pos + len(text_span.strip())
                     relevant_comments.append(relevant_comment)
             else:
-                # If no specific text span, add comment to the beginning of paragraph
-                relevant_comment = comment.copy()
-                relevant_comment['start'] = 0
-                relevant_comment['end'] = min(50, len(content))  # First 50 chars
-                relevant_comments.append(relevant_comment)
+                # If no specific text span, treat as general paragraph comment
+                general_comments.append(comment)
         
+        # If we have no specific text span comments, just add the content normally
         if not relevant_comments:
             paragraph.add_run(content)
-            logger.info("No relevant comments found for paragraph, added content without comments")
-            return
+            logger.info("No text-span specific comments found, added content without highlighting")
+        else:
+            logger.info(
+                "Found relevant comments for paragraph",
+                relevant_comment_count=len(relevant_comments),
+                comment_types=[c.get('type', 'unknown') for c in relevant_comments],
+                comment_severities=[c.get('severity', 'unknown') for c in relevant_comments]
+            )
 
-        logger.info(
-            "Found relevant comments for paragraph",
-            relevant_comment_count=len(relevant_comments),
-            comment_types=[c.get('type', 'unknown') for c in relevant_comments],
-            comment_severities=[c.get('severity', 'unknown') for c in relevant_comments]
-        )
+            # Sort comments by position to avoid overlaps
+            sorted_comments = sorted(relevant_comments, key=lambda x: x.get('start', 0))
 
-        # Sort comments by position
-        sorted_comments = sorted(relevant_comments, key=lambda x: x.get('start', 0))
-        
-        current_pos = 0
-        
-        for comment in sorted_comments:
-            start_pos = comment.get('start', 0)
-            end_pos = comment.get('end', start_pos + 1)
-            
-            # Ensure positions are within content bounds
-            start_pos = max(0, min(start_pos, len(content)))
-            end_pos = max(start_pos, min(end_pos, len(content)))
-            
-            # Add text before the comment
-            if current_pos < start_pos:
-                paragraph.add_run(content[current_pos:start_pos])
-            
-            # Add highlighted text with comment
-            if start_pos < end_pos:
-                highlighted_text = content[start_pos:end_pos]
-                comment_run = paragraph.add_run(highlighted_text)
-                
-                # Apply highlighting based on severity
-                severity = comment.get('severity', 'medium')
-                if severity == 'high':
-                    comment_run.font.highlight_color = WD_COLOR_INDEX.RED
-                elif severity == 'medium':
-                    comment_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
-                elif severity == 'low':
-                    comment_run.font.highlight_color = WD_COLOR_INDEX.BRIGHT_GREEN
-                else:
-                    comment_run.font.highlight_color = WD_COLOR_INDEX.BLUE
-                
-                # Add comment to the highlighted text using bayoo-docx
-                comment_text = comment.get('text', '')
-                comment_type = comment.get('type', 'validation')
+            current_pos = 0
 
-                # Ensure comment text is not empty
-                if comment_text:
-                    # Create a Word comment using bayoo-docx API
-                    full_comment_text = f"AI Validation - {comment_type.title()}: {comment_text}"
-                    author = f"AI Validator ({severity.title()})"
-                    initials = f"AI{severity[0].upper()}"
+            for comment in sorted_comments:
+                start_pos = comment.get('start', 0)
+                end_pos = comment.get('end', start_pos + 1)
 
-                    try:
-                        # Use bayoo-docx's add_comment method on the run
-                        comment_obj = comment_run.add_comment(
-                            text=full_comment_text,
-                            author=author,
-                            initials=initials
-                        )
-                        logger.info(
-                            "Added bayoo-docx comment for validation issue",
-                            comment_type=comment_type,
-                            severity=severity,
-                            author=author,
-                            text_length=len(full_comment_text),
-                            highlighted_text=highlighted_text[:50] + "..." if len(highlighted_text) > 50 else highlighted_text
-                        )
-                    except Exception as e:
-                        logger.info(
-                            "Failed to add bayoo-docx comment, using inline fallback",
-                            comment_type=comment_type,
-                            severity=severity,
-                            error=str(e)
-                        )
-                        # Fallback to inline annotation if comment creation fails
-                        footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
-                        footnote_run.font.size = Pt(8)
-                        footnote_run.font.italic = True
+                # Ensure positions are within content bounds
+                start_pos = max(0, min(start_pos, len(content)))
+                end_pos = max(start_pos, min(end_pos, len(content)))
 
-                        # Color code the comment based on severity
-                        if severity == 'high':
-                            footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
-                        elif severity == 'medium':
-                            footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
-                        else:
-                            footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
-            
-            current_pos = end_pos
-        
-        # Add remaining text
-        if current_pos < len(content):
-            paragraph.add_run(content[current_pos:])
+                # Add text before the comment
+                if current_pos < start_pos:
+                    paragraph.add_run(content[current_pos:start_pos])
+
+                # Add highlighted text with comment
+                if start_pos < end_pos:
+                    highlighted_text = content[start_pos:end_pos]
+                    comment_run = paragraph.add_run(highlighted_text)
+
+                    # Apply highlighting based on severity
+                    severity = comment.get('severity', 'medium')
+                    if severity == 'high':
+                        comment_run.font.highlight_color = WD_COLOR_INDEX.RED
+                    elif severity == 'medium':
+                        comment_run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+                    elif severity == 'low':
+                        comment_run.font.highlight_color = WD_COLOR_INDEX.BRIGHT_GREEN
+                    else:
+                        comment_run.font.highlight_color = WD_COLOR_INDEX.BLUE
+
+                    # Add comment to the highlighted text using bayoo-docx
+                    comment_text = comment.get('text', '')
+                    comment_type = comment.get('type', 'validation')
+
+                    # Ensure comment text is not empty
+                    if comment_text:
+                        # Create a Word comment using bayoo-docx API
+                        full_comment_text = f"AI Validation - {comment_type.title()}: {comment_text}"
+                        author = f"AI Validator ({severity.title()})"
+                        initials = f"AI{severity[0].upper()}"
+
+                        try:
+                            # Use bayoo-docx's add_comment method on the run
+                            comment_obj = comment_run.add_comment(
+                                text=full_comment_text,
+                                author=author,
+                                initials=initials
+                            )
+                            logger.info(
+                                "Added bayoo-docx comment for validation issue",
+                                comment_type=comment_type,
+                                severity=severity,
+                                author=author,
+                                text_length=len(full_comment_text),
+                                highlighted_text=highlighted_text[:50] + "..." if len(highlighted_text) > 50 else highlighted_text
+                            )
+                        except Exception as e:
+                            logger.info(
+                                "Failed to add bayoo-docx comment, using inline fallback",
+                                comment_type=comment_type,
+                                severity=severity,
+                                error=str(e)
+                            )
+                            # Fallback to inline annotation if comment creation fails
+                            footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
+                            footnote_run.font.size = Pt(8)
+                            footnote_run.font.italic = True
+
+                            # Color code the comment based on severity
+                            if severity == 'high':
+                                footnote_run.font.color.rgb = RGBColor(204, 0, 0)  # Dark red
+                            elif severity == 'medium':
+                                footnote_run.font.color.rgb = RGBColor(255, 102, 0)  # Orange
+                            else:
+                                footnote_run.font.color.rgb = RGBColor(0, 102, 204)  # Blue
+
+                current_pos = end_pos
+
+            # Add remaining text
+            if current_pos < len(content):
+                paragraph.add_run(content[current_pos:])
+
+        # Combine all comments for paragraph-level comment
+        all_comments = relevant_comments + general_comments
         
         # Add paragraph-level validation summary as a comment using bayoo-docx
-        if relevant_comments:
+        if all_comments:
             # Create summary text for paragraph comment
-            summary_text = f"Paragraph validation summary: {len(relevant_comments)} issue(s) identified"
+            summary_text = f"Paragraph validation summary: {len(all_comments)} issue(s) identified"
             summary_details = []
 
-            for comment in relevant_comments:
+            for comment in all_comments:
                 severity = comment.get('severity', 'medium')
                 issue_type = comment.get('type', 'validation')
                 summary_details.append(f"• {severity.title()} {issue_type}: {comment.get('text', 'No details')}")
@@ -410,19 +412,19 @@ class WordReportGenerator:
                 )
                 logger.info(
                     "Added bayoo-docx paragraph-level validation comment",
-                    issue_count=len(relevant_comments),
+                    issue_count=len(all_comments),
                     summary_length=len(full_summary),
-                    severities=[c.get('severity', 'unknown') for c in relevant_comments]
+                    severities=[c.get('severity', 'unknown') for c in all_comments]
                 )
             except Exception as e:
                 logger.info(
                     "Failed to add bayoo-docx paragraph comment, using inline fallback",
-                    issue_count=len(relevant_comments),
+                    issue_count=len(all_comments),
                     error=str(e)
                 )
                 # Fallback to inline text if comment creation fails
                 validation_summary_run = paragraph.add_run(
-                    f"\n[Paragraph Validation: {len(relevant_comments)} issue(s) identified]"
+                    f"\n[Paragraph Validation: {len(all_comments)} issue(s) identified]"
                 )
                 validation_summary_run.font.size = Pt(9)
                 validation_summary_run.font.italic = True
