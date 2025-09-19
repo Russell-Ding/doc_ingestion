@@ -2,6 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+import docx  # Using bayoo-docx for enhanced comment support
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
@@ -18,7 +19,7 @@ logger = structlog.get_logger(__name__)
 
 
 class WordReportGenerator:
-    """Generates Word documents with embedded validation comments"""
+    """Generates Word documents with embedded validation comments using bayoo-docx"""
     
     def __init__(self):
         self.template_path = settings.WORD_TEMPLATE_PATH
@@ -251,7 +252,12 @@ class WordReportGenerator:
         content: str,
         word_comments: List[Dict[str, Any]]
     ):
-        """Add content with embedded validation comments"""
+        """Add content with embedded validation comments using bayoo-docx API
+
+        This method uses bayoo-docx's enhanced comment functionality to add
+        validation comments directly to paragraphs and runs, providing native
+        Word comment support with proper author metadata.
+        """
 
         logger.info(
             "Processing paragraph content with validation comments",
@@ -330,27 +336,26 @@ class WordReportGenerator:
                 else:
                     comment_run.font.highlight_color = WD_COLOR_INDEX.BLUE
                 
-                # Add comment to the highlighted text
+                # Add comment to the highlighted text using bayoo-docx
                 comment_text = comment.get('text', '')
                 comment_type = comment.get('type', 'validation')
 
                 # Ensure comment text is not empty
                 if comment_text:
-                    # Create a Word comment attached to the highlighted run
+                    # Create a Word comment using bayoo-docx API
                     full_comment_text = f"AI Validation - {comment_type.title()}: {comment_text}"
                     author = f"AI Validator ({severity.title()})"
+                    initials = f"AI{severity[0].upper()}"
 
-                    # Add the comment to the document attached to the highlighted run
                     try:
-                        # Get the document from the paragraph's parent structure
-                        document = paragraph._parent._parent
-                        doc_comment = document.add_comment(
-                            runs=comment_run,
+                        # Use bayoo-docx's add_comment method on the run
+                        comment_obj = comment_run.add_comment(
                             text=full_comment_text,
-                            author=author
+                            author=author,
+                            initials=initials
                         )
                         logger.info(
-                            "Added Word comment for validation issue",
+                            "Added bayoo-docx comment for validation issue",
                             comment_type=comment_type,
                             severity=severity,
                             author=author,
@@ -359,7 +364,7 @@ class WordReportGenerator:
                         )
                     except Exception as e:
                         logger.info(
-                            "Failed to add Word comment, using inline fallback",
+                            "Failed to add bayoo-docx comment, using inline fallback",
                             comment_type=comment_type,
                             severity=severity,
                             error=str(e)
@@ -383,9 +388,9 @@ class WordReportGenerator:
         if current_pos < len(content):
             paragraph.add_run(content[current_pos:])
         
-        # Add paragraph-level validation summary as a comment if there are comments
+        # Add paragraph-level validation summary as a comment using bayoo-docx
         if relevant_comments:
-            # Create a summary run for the comment to attach to
+            # Create summary text for paragraph comment
             summary_text = f"Paragraph validation summary: {len(relevant_comments)} issue(s) identified"
             summary_details = []
 
@@ -396,27 +401,22 @@ class WordReportGenerator:
 
             full_summary = summary_text + "\n\nDetails:\n" + "\n".join(summary_details)
 
-            # Create an invisible run to attach the paragraph comment to
-            summary_run = paragraph.add_run("")
-
-            # Add paragraph-level comment
+            # Add paragraph-level comment using bayoo-docx
             try:
-                # Get the document from the paragraph's parent structure
-                document = paragraph._parent._parent
-                document.add_comment(
-                    runs=summary_run,
+                paragraph_comment = paragraph.add_comment(
                     text=full_summary,
-                    author="AI Paragraph Validator"
+                    author="AI Paragraph Validator",
+                    initials="APV"
                 )
                 logger.info(
-                    "Added paragraph-level validation comment",
+                    "Added bayoo-docx paragraph-level validation comment",
                     issue_count=len(relevant_comments),
                     summary_length=len(full_summary),
                     severities=[c.get('severity', 'unknown') for c in relevant_comments]
                 )
             except Exception as e:
                 logger.info(
-                    "Failed to add paragraph validation comment, using inline fallback",
+                    "Failed to add bayoo-docx paragraph comment, using inline fallback",
                     issue_count=len(relevant_comments),
                     error=str(e)
                 )

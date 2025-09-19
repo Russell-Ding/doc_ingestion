@@ -81,7 +81,7 @@ class EnhancedDocumentProcessor(DocumentProcessor):
             # Add column statistics
             table_info += "Column Statistics:\n"
             for col in df.columns:
-                if df[col].dtype in ['int64', 'float64']:
+                if pd.api.types.is_numeric_dtype(df[col]):
                     stats = df[col].describe()
                     table_info += f"- {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}\n"
                 else:
@@ -255,21 +255,21 @@ Summary:"""
             col_info += f"Non-null Values: {series.count()}\n"
             col_info += f"Unique Values: {series.nunique()}\n\n"
 
-            if series.dtype in ['int64', 'float64']:
+            if pd.api.types.is_numeric_dtype(series):
                 stats = series.describe()
                 col_info += f"Statistics:\n- Min: {stats['min']}\n- Max: {stats['max']}\n- Mean: {stats['mean']:.2f}\n- Std: {stats['std']:.2f}\n\n"
 
             # Sample values
             col_info += f"Sample Values:\n{series.dropna().head(10).tolist()}\n"
 
-            if series.dtype == 'object':
+            if pd.api.types.is_object_dtype(series):
                 value_counts = series.value_counts().head(5)
                 col_info += f"\nMost Common Values:\n{value_counts.to_string()}\n"
 
             # Simple summary without LLM for performance
             summary = f"Column '{column_name}' contains {series.count()} values of type {series.dtype}. "
 
-            if series.dtype in ['int64', 'float64']:
+            if pd.api.types.is_numeric_dtype(series):
                 summary += f"Range from {series.min()} to {series.max()} with mean {series.mean():.2f}."
             else:
                 summary += f"Has {series.nunique()} unique values."
