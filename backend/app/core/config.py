@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     
     # Document Processing
     MAX_FILE_SIZE_MB: int = 100
-    SUPPORTED_FILE_TYPES: List[str] = ["pdf", "docx", "xlsx", "jpg", "jpeg", "png"]
+    SUPPORTED_FILE_TYPES: List[str] = ["pdf", "docx", "xlsx", "xls", "csv", "eml", "msg", "jpg", "jpeg", "png"]
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 100
     
