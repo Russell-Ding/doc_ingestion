@@ -252,7 +252,13 @@ class WordReportGenerator:
         word_comments: List[Dict[str, Any]]
     ):
         """Add content with embedded validation comments"""
-        
+
+        logger.info(
+            "Processing paragraph content with validation comments",
+            content_length=len(content),
+            comment_count=len(word_comments) if word_comments else 0
+        )
+
         if not word_comments:
             paragraph.add_run(content)
             return
@@ -281,8 +287,16 @@ class WordReportGenerator:
         
         if not relevant_comments:
             paragraph.add_run(content)
+            logger.info("No relevant comments found for paragraph, added content without comments")
             return
-        
+
+        logger.info(
+            "Found relevant comments for paragraph",
+            relevant_comment_count=len(relevant_comments),
+            comment_types=[c.get('type', 'unknown') for c in relevant_comments],
+            comment_severities=[c.get('severity', 'unknown') for c in relevant_comments]
+        )
+
         # Sort comments by position
         sorted_comments = sorted(relevant_comments, key=lambda x: x.get('start', 0))
         
@@ -328,12 +342,28 @@ class WordReportGenerator:
 
                     # Add the comment to the document attached to the highlighted run
                     try:
-                        doc_comment = paragraph._parent.add_comment(
+                        # Get the document from the paragraph's parent structure
+                        document = paragraph._parent._parent
+                        doc_comment = document.add_comment(
                             runs=comment_run,
                             text=full_comment_text,
                             author=author
                         )
+                        logger.info(
+                            "Added Word comment for validation issue",
+                            comment_type=comment_type,
+                            severity=severity,
+                            author=author,
+                            text_length=len(full_comment_text),
+                            highlighted_text=highlighted_text[:50] + "..." if len(highlighted_text) > 50 else highlighted_text
+                        )
                     except Exception as e:
+                        logger.info(
+                            "Failed to add Word comment, using inline fallback",
+                            comment_type=comment_type,
+                            severity=severity,
+                            error=str(e)
+                        )
                         # Fallback to inline annotation if comment creation fails
                         footnote_run = paragraph.add_run(f" [AI Validation - {comment_type.title()}: {comment_text}]")
                         footnote_run.font.size = Pt(8)
@@ -371,12 +401,25 @@ class WordReportGenerator:
 
             # Add paragraph-level comment
             try:
-                paragraph._parent.add_comment(
+                # Get the document from the paragraph's parent structure
+                document = paragraph._parent._parent
+                document.add_comment(
                     runs=summary_run,
                     text=full_summary,
                     author="AI Paragraph Validator"
                 )
-            except Exception:
+                logger.info(
+                    "Added paragraph-level validation comment",
+                    issue_count=len(relevant_comments),
+                    summary_length=len(full_summary),
+                    severities=[c.get('severity', 'unknown') for c in relevant_comments]
+                )
+            except Exception as e:
+                logger.info(
+                    "Failed to add paragraph validation comment, using inline fallback",
+                    issue_count=len(relevant_comments),
+                    error=str(e)
+                )
                 # Fallback to inline text if comment creation fails
                 validation_summary_run = paragraph.add_run(
                     f"\n[Paragraph Validation: {len(relevant_comments)} issue(s) identified]"
