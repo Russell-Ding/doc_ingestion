@@ -1988,50 +1988,78 @@ def show_generated_report(report):
         # Generation button - always show when no document is ready
         if not st.session_state.word_download_data:
             if st.button("📄 Generate Word Document", type="primary", use_container_width=True, key="generate_word_final"):
-                # Generate within spinner - NO RERUN NEEDED
+                # Smart generation with backend detection - NO RERUN NEEDED
                 with st.spinner("🔄 Generating Word document..."):
-                    try:
-                        # Method 1: Try direct generation first
-                        direct_result = create_direct_word_document(report, include_validation)
 
-                        if direct_result and not direct_result.get('error'):
-                            st.session_state.word_download_data = {
-                                'content': direct_result['content'],
-                                'filename': direct_result['filename'],
-                                'type': 'direct'
-                            }
-                            st.session_state.word_generation_status = 'success'
+                    # First check if backend is available
+                    backend_available = False
+                    try:
+                        health_response = requests.get(f"{API_BASE_URL}/health/", timeout=2)
+                        backend_available = health_response.status_code == 200
+                        if backend_available:
+                            st.info("🌐 Backend detected - using API generation")
+                    except:
+                        st.info("💻 Backend unavailable - using local generation")
+
+                    try:
+                        if backend_available:
+                            # Method 1: Try backend API first
+                            try:
+                                backend_result = create_report_and_export_word(report, include_validation)
+                                if backend_result and not backend_result.get('error'):
+                                    st.session_state.word_download_data = {
+                                        'content': backend_result['content'],
+                                        'filename': backend_result['filename'],
+                                        'type': 'backend_api'
+                                    }
+                                    st.session_state.word_generation_status = 'success'
+                                    st.success("✅ Backend API generation successful!")
+                                else:
+                                    raise Exception("Backend returned error or no content")
+                            except Exception as backend_error:
+                                st.warning(f"Backend API failed: {str(backend_error)}")
+                                raise backend_error
                         else:
-                            # Method 2: Try basic generation
-                            basic_content = create_basic_word_content_with_comments(report, include_validation)
-                            if basic_content:
+                            # Method 2: Local generation when backend not available
+                            direct_result = create_direct_word_document(report, include_validation)
+                            if direct_result and not direct_result.get('error'):
                                 st.session_state.word_download_data = {
-                                    'content': basic_content,
-                                    'filename': f"{report['title'].replace(' ', '_')}_basic.docx",
-                                    'type': 'basic'
+                                    'content': direct_result['content'],
+                                    'filename': direct_result['filename'],
+                                    'type': 'local_direct'
                                 }
                                 st.session_state.word_generation_status = 'success'
+                                st.success("✅ Local generation successful!")
                             else:
-                                st.session_state.word_generation_status = 'error'
+                                raise Exception("Local direct generation failed")
 
                     except Exception as e:
-                        # Final fallback - create minimal document
+                        # Final fallback - always works
+                        st.warning(f"Primary method failed: {str(e)}")
+                        st.info("🔧 Using reliable fallback generation...")
                         try:
                             minimal_content = create_minimal_word_document(report)
                             st.session_state.word_download_data = {
                                 'content': minimal_content,
-                                'filename': f"{report['title'].replace(' ', '_')}_minimal.docx",
-                                'type': 'minimal'
+                                'filename': f"{report['title'].replace(' ', '_')}_fallback.docx",
+                                'type': 'fallback'
                             }
                             st.session_state.word_generation_status = 'success'
+                            st.success("✅ Fallback generation successful!")
                         except Exception as fallback_error:
                             st.session_state.word_generation_status = 'error'
-                            st.error(f"Word generation failed: {str(e)}")
-                            st.error(f"Fallback also failed: {str(fallback_error)}")
+                            st.error(f"❌ All generation methods failed: {str(fallback_error)}")
 
-                # Show success message and continue to download section below
+                # Show generation type info
                 if st.session_state.word_download_data:
-                    st.success("✅ Word document generated successfully!")
+                    gen_type = st.session_state.word_download_data.get('type', 'unknown')
+                    type_descriptions = {
+                        'backend_api': 'Generated using backend API with full AI processing',
+                        'local_direct': 'Generated locally with document styling and validation',
+                        'fallback': 'Generated using reliable fallback method'
+                    }
+                    if gen_type in type_descriptions:
+                        st.info(f"📋 {type_descriptions[gen_type]}")
 
         # Download section - ALWAYS visible if document exists
         if st.session_state.word_download_data:
