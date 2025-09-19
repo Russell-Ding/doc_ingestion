@@ -57,14 +57,18 @@ class EnhancedDocumentProcessor(DocumentProcessor):
 
     def __init__(self):
         super().__init__()
-        # Add new file type handlers
-        self.file_handlers.update({
+        # The parent class uses 'supported_types', not 'file_handlers'
+        # Add new file type handlers to the inherited supported_types
+        self.supported_types.update({
             '.csv': self._process_csv_enhanced,
             '.xlsx': self._process_excel_enhanced,
             '.xls': self._process_excel_enhanced,
             '.eml': self._process_email,
             '.msg': self._process_outlook_msg
         })
+
+        # Also create file_handlers alias for compatibility
+        self.file_handlers = self.supported_types
 
     async def _generate_table_summary(self, df: pd.DataFrame, context: str = "") -> str:
         """Generate LLM summary of table content for vector search"""
