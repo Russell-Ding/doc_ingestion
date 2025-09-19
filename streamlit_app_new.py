@@ -1567,94 +1567,85 @@ def show_report_generation_page():
         elif not selected_docs:
             st.error("Please select at least one document.")
         else:
-            # Generate report
+            # Show progress tracking
+            progress_placeholder = st.empty()
+            progress_bar = st.progress(0)
+            total_sections = len(st.session_state.segments)
+
             with st.spinner("🤖 Generating report sections..."):
-                generated_report = generate_complete_report(
-                    title=report_title,
-                    segments=st.session_state.segments,
-                    selected_documents=selected_docs
-                )
+                # Initialize report sections list
+                report_sections = []
+                selected_document_ids = [doc.get('id', doc.get('document_id')) for doc in selected_docs if doc.get('id') or doc.get('document_id')]
+
+                # Process each segment with progress updates
+                for i, segment in enumerate(st.session_state.segments):
+                    progress_placeholder.text(f"Generating: {segment['name']}... ({i+1}/{total_sections})")
+
+                    try:
+                        # Create segment data
+                        segment_data = {
+                            "name": segment['name'],
+                            "prompt": segment['prompt'],
+                            "required_document_types": [],
+                            "generation_settings": {}
+                        }
+
+                        result = generate_segment_content(segment_data, selected_document_ids)
+
+                        if result and not result.get('error'):
+                            content = result.get('generated_content', 'No content generated')
+                            validation_results = result.get('validation_results', {})
+                            generation_metadata = result.get('generation_metadata', {})
+
+                            report_sections.append({
+                                "name": segment['name'],
+                                "content": content,
+                                "validation_results": validation_results,
+                                "metadata": {
+                                    **generation_metadata,
+                                    "validation_results": validation_results
+                                }
+                            })
+                        else:
+                            error_msg = result.get('error', 'Unknown error') if result else 'No response from server'
+                            report_sections.append({
+                                "name": segment['name'],
+                                "content": f"*Content generation failed: {error_msg}*",
+                                "metadata": {}
+                            })
+
+                    except Exception as e:
+                        report_sections.append({
+                            "name": segment['name'],
+                            "content": f"*Error: {str(e)}*",
+                            "metadata": {}
+                        })
+
+                    # Update progress
+                    progress_bar.progress((i + 1) / total_sections)
+
+                # Create final report
+                generated_report = {
+                    "title": report_title,
+                    "sections": report_sections,
+                    "documents_used": selected_docs,
+                    "generation_date": time.strftime("%Y-%m-%d %H:%M:%S")
+                }
+
+                progress_placeholder.text("Report generation complete!")
+
             if generated_report:
                 st.session_state.current_report = generated_report
-                # Rerun to display the report below
-                st.rerun()
+                st.success("✅ Report generated successfully!")
+                # Clear progress indicators
+                progress_placeholder.empty()
+                progress_bar.empty()
 
     # Display the generated report if it exists in the session state
     if 'current_report' in st.session_state:
         show_generated_report(st.session_state.current_report)
 
 
-def generate_complete_report(title, segments, selected_documents):
-    """Generate complete report with all segments"""
-    
-    report_sections = []
-    total_sections = len(segments)
-    
-    # Extract document IDs from selected documents
-    selected_document_ids = [doc.get('id', doc.get('document_id')) for doc in selected_documents if doc.get('id') or doc.get('document_id')]
-    
-    # Progress tracking
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for i, segment in enumerate(segments):
-        status_text.text(f"Generating: {segment['name']}...")
-        
-        # Generate content for this segment
-        try:
-            # Create segment data
-            segment_data = {
-                "name": segment['name'],
-                "prompt": segment['prompt'],
-                "required_document_types": [],
-                "generation_settings": {}
-            }
-            
-            result = generate_segment_content(segment_data, selected_document_ids)
-            
-            if result and not result.get('error'):
-                content = result.get('generated_content', 'No content generated')
-                validation_results = result.get('validation_results', {})
-                generation_metadata = result.get('generation_metadata', {})
-                
-                # Store validation results both in metadata and as a top-level field
-                report_sections.append({
-                    "name": segment['name'],
-                    "content": content,
-                    "validation_results": validation_results,
-                    "metadata": {
-                        **generation_metadata,
-                        "validation_results": validation_results
-                    }
-                })
-                st.success(f"✅ {segment['name']} completed")
-            else:
-                error_msg = result.get('error', 'Unknown error') if result else 'No response from server'
-                st.error(f"❌ Failed to generate {segment['name']}: {error_msg}")
-                report_sections.append({
-                    "name": segment['name'],
-                    "content": f"*Content generation failed: {error_msg}*",
-                    "metadata": {}
-                })
-        
-        except Exception as e:
-            st.error(f"❌ Error generating {segment['name']}: {str(e)}")
-            report_sections.append({
-                "name": segment['name'],
-                "content": f"*Error: {str(e)}*",
-                "metadata": {}
-            })
-        
-        progress_bar.progress((i + 1) / total_sections)
-    
-    status_text.text("Report generation complete!")
-    
-    return {
-        "title": title,
-        "sections": report_sections,
-        "documents_used": selected_documents,
-        "generation_date": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
 
 def get_paragraph_validation(validation_data, paragraph_text):
     """Get validation status for a specific paragraph"""
